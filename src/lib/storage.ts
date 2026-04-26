@@ -17,6 +17,7 @@ export type PhotoData = Record<string, Record<string, string[]>>;
 export type PersistentData = {
   photos: Record<InspectionPhase, PhotoData>;
   currentPhase: InspectionPhase;
+  roomConfig?: Record<string, number>;
   blockchainProof?: {
     hash: string;
     txId: string;

@@ -27,6 +27,15 @@
         { "id": "fixtures", "label": "Fixtures & Mirror", "guide": "Capture water spots or chips." },
         { "id": "shower", "label": "Shower & Tub", "guide": "Check for drainage issues or stains." }
       ]
+    },
+    {
+      "id": "living-room",
+      "name": "Living Room",
+      "steps": [
+        { "id": "walls", "label": "Walls & Ceiling", "guide": "Capture scuffs, holes, or water stains." },
+        { "id": "floor", "label": "Flooring", "guide": "Focus on scratches or loose tiles." },
+        { "id": "windows", "label": "Windows", "guide": "Check for cracks or dirt." }
+      ]
     }
   ]
 }
