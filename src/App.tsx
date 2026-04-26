@@ -1,21 +1,21 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Camera, LayoutGrid, FileText, Settings, ArrowLeft, CheckCircle2, ChevronRight, Image as ImageIcon, ShieldCheck, AlertTriangle, ScanLine, Home } from 'lucide-react';
+import { Camera, FileText, Settings, ArrowLeft, CheckCircle2, ChevronRight, Image as ImageIcon, ShieldCheck, AlertTriangle, ScanLine, Home } from 'lucide-react';
 import walkthroughData from './walkthrough.json';
 import { loadAppData, saveAppData, clearAppData, type PersistentData, type InspectionPhase } from './lib/storage';
 import { computeHash } from './lib/hash';
-import { submitMoveInReport, submitMoveOutReport, analyzeImage, type MoveInResponse, type DiscrepancyResult, type AnalysisData } from './lib/api';
+import { submitMoveInReport, submitMoveOutReport, analyzeImage, type DiscrepancyResult, type AnalysisData } from './lib/api';
 import ImageUpload from './components/ImageUpload';
 import AnalysisResult from './components/AnalysisResult';
 
-type AppState = 'setup' | 'hub' | 'wizard' | 'report' | 'settings' | 'processing' | 'analyze';
+type AppState = 'setup' | 'hub' | 'wizard' | 'report' | 'processing' | 'analyze';
 
 type Room = { id: string; name: string; steps: { id: string; label: string; guide: string }[] };
 
 const ROOM_TYPES = [
-  { id: 'bedroom',     label: '방',    emoji: '🛏', color: '#7c6ff7' },
-  { id: 'bathroom',    label: '화장실', emoji: '🚿', color: '#06b6d4' },
-  { id: 'kitchen',     label: '부엌',  emoji: '🍳', color: '#f97316' },
-  { id: 'living-room', label: '거실',  emoji: '🛋', color: '#10b981' },
+  { id: 'bedroom',     label: '방',    emoji: '🛏', color: '#818CF8' },
+  { id: 'bathroom',    label: '화장실', emoji: '🚿', color: '#38BDF8' },
+  { id: 'kitchen',     label: '부엌',  emoji: '🍳', color: '#FB923C' },
+  { id: 'living-room', label: '거실',  emoji: '🛋', color: '#34D399' },
 ];
 
 export default function App() {
@@ -102,20 +102,16 @@ export default function App() {
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const newPhoto = canvas.toDataURL('image/jpeg', 0.8);
-
     setData(prev => {
-      const currentPhase = prev.currentPhase;
-      const phasePhotos = prev.photos[currentPhase] || {};
+      const phase = prev.currentPhase;
+      const phasePhotos = prev.photos[phase] || {};
       const roomPhotos = phasePhotos[selectedRoomId] || {};
       const stepPhotos = roomPhotos[currentStep.id] || [];
       return {
         ...prev,
         photos: {
           ...prev.photos,
-          [currentPhase]: {
-            ...phasePhotos,
-            [selectedRoomId]: { ...roomPhotos, [currentStep.id]: [...stepPhotos, newPhoto] }
-          }
+          [phase]: { ...phasePhotos, [selectedRoomId]: { ...roomPhotos, [currentStep.id]: [...stepPhotos, newPhoto] } }
         }
       };
     });
@@ -129,9 +125,8 @@ export default function App() {
     }
   };
 
-  const getStepPhotos = (phase: InspectionPhase, roomId: string, stepId: string) => {
-    return (data.photos[phase]?.[roomId]?.[stepId]) || [];
-  };
+  const getStepPhotos = (phase: InspectionPhase, roomId: string, stepId: string) =>
+    data.photos[phase]?.[roomId]?.[stepId] || [];
 
   const getFirstPhotoInRoom = (phase: InspectionPhase, roomId: string) => {
     const roomPhotos = data.photos[phase]?.[roomId] || {};
@@ -177,7 +172,7 @@ export default function App() {
   if (isLoading) return (
     <div className="loading-screen">
       <div className="loading-logo">
-        <Home size={30} color="white" />
+        <Home size={32} color="#1A1E2D" />
       </div>
       <div className="spinner" />
     </div>
@@ -187,51 +182,60 @@ export default function App() {
   const currentPhotos = selectedRoomId && currentStep ? getStepPhotos(data.currentPhase, selectedRoomId, currentStep.id) : [];
   const lastPhoto = currentPhotos[currentPhotos.length - 1];
 
+  const totalCompleted = rooms.filter(room =>
+    room.steps.length > 0 && room.steps.every(s => getStepPhotos(data.currentPhase, room.id, s.id).length > 0)
+  ).length;
+
   return (
     <div className="app">
 
       {/* ── SETUP ── */}
       {view === 'setup' && (
         <div className="setup-view">
-          <div className="setup-hero">
-            <div className="setup-app-icon">
-              <Home size={34} color="white" />
-            </div>
-            <h1>집기록</h1>
-            <p>촬영할 공간의 종류와 개수를<br />설정해 주세요.</p>
-          </div>
-          <div className="setup-list">
-            {ROOM_TYPES.map(type => (
-              <div key={type.id} className="setup-row">
-                <div className="setup-row-info">
-                  <div className="setup-room-icon" style={{ background: `${type.color}22`, border: `1px solid ${type.color}44` }}>
-                    <span>{type.emoji}</span>
-                  </div>
-                  <span className="setup-label">{type.label}</span>
-                </div>
-                <div className="setup-counter">
-                  <button
-                    className="counter-btn"
-                    onClick={() => setSetupCounts(prev => ({ ...prev, [type.id]: Math.max(0, (prev[type.id] || 0) - 1) }))}
-                    disabled={(setupCounts[type.id] || 0) === 0}
-                  >−</button>
-                  <span className="counter-value">{setupCounts[type.id] || 0}</span>
-                  <button
-                    className="counter-btn"
-                    onClick={() => setSetupCounts(prev => ({ ...prev, [type.id]: Math.min(9, (prev[type.id] || 0) + 1) }))}
-                  >+</button>
-                </div>
+          <div className="view-hero">
+            <div className="setup-hero-inner">
+              <div className="setup-app-icon">
+                <Home size={36} color="white" />
               </div>
-            ))}
+              <h1>House Record</h1>
+              <p>촬영할 공간의 종류와 개수를<br />설정해 주세요.</p>
+            </div>
           </div>
-          <div className="setup-footer">
-            <button
-              className="cta-btn"
-              disabled={Object.values(setupCounts).every(v => v === 0)}
-              onClick={handleSetupConfirm}
-            >
-              시작하기
-            </button>
+          <div className="view-shelf">
+            <p className="section-title">공간 구성</p>
+            <div className="setup-list">
+              {ROOM_TYPES.map(type => (
+                <div key={type.id} className="setup-row">
+                  <div className="setup-row-info">
+                    <div className="setup-room-icon" style={{ background: `${type.color}20`, border: `1.5px solid ${type.color}35` }}>
+                      <span>{type.emoji}</span>
+                    </div>
+                    <span className="setup-label">{type.label}</span>
+                  </div>
+                  <div className="setup-counter">
+                    <button
+                      className="counter-btn"
+                      onClick={() => setSetupCounts(prev => ({ ...prev, [type.id]: Math.max(0, (prev[type.id] || 0) - 1) }))}
+                      disabled={(setupCounts[type.id] || 0) === 0}
+                    >−</button>
+                    <span className="counter-value">{setupCounts[type.id] || 0}</span>
+                    <button
+                      className="counter-btn"
+                      onClick={() => setSetupCounts(prev => ({ ...prev, [type.id]: Math.min(9, (prev[type.id] || 0) + 1) }))}
+                    >+</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="setup-footer">
+              <button
+                className="cta-btn-dark"
+                disabled={Object.values(setupCounts).every(v => v === 0)}
+                onClick={handleSetupConfirm}
+              >
+                시작하기
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -239,69 +243,75 @@ export default function App() {
       {/* ── HUB ── */}
       {view === 'hub' && (
         <div className="hub-container">
-          <div className="hub-hero">
-            <div className="hub-hero-top">
-              <div className="hub-app-name">
-                <Home size={16} color="#3b82f6" style={{ flexShrink: 0 }} />
-                <span>집기록</span>
-              </div>
+          <div className="view-hero">
+            <div className="hero-app-name">
+              <Home size={15} color="rgba(255,255,255,0.75)" />
+              <span>House Record</span>
             </div>
-            <div className={`phase-pill ${data.currentPhase}`}>
+            <div className={`hero-phase-pill ${data.currentPhase}`}>
               <span className="phase-pill-dot" />
               {data.currentPhase === 'move-in' ? 'STEP 1 · 입주 전' : 'STEP 2 · 퇴실'}
             </div>
-            <h1>{data.currentPhase === 'move-in' ? '입주 전\n점검 기록' : '퇴실\n점검 기록'}</h1>
-            <p>각 공간의 상태를 촬영하세요.</p>
+            <h1 className="hero-title">
+              {data.currentPhase === 'move-in' ? '입주 전 점검' : '퇴실 점검'}
+            </h1>
+            <p className="hero-subtitle">각 공간의 상태를 촬영하세요.</p>
+            <p className="hero-stat">{totalCompleted}/{rooms.length} 공간 촬영 완료</p>
+            <div className="hero-progress-bar">
+              <div
+                className="hero-progress-fill"
+                style={{ width: rooms.length > 0 ? `${(totalCompleted / rooms.length) * 100}%` : '0%' }}
+              />
+            </div>
           </div>
 
-          <div className="room-grid">
-            {rooms.map(room => {
-              const firstPhoto = getFirstPhotoInRoom(data.currentPhase, room.id);
-              const completedSteps = room.steps.filter(s => getStepPhotos(data.currentPhase, room.id, s.id).length > 0).length;
-              const progressPct = room.steps.length > 0 ? (completedSteps / room.steps.length) * 100 : 0;
-              const roomTypeId = room.id.replace(/-\d+$/, '');
-              const roomType = ROOM_TYPES.find(t => t.id === roomTypeId);
-              const roomColor = roomType?.color ?? '#7c6ff7';
+          <div className="view-shelf">
+            <p className="section-title">공간 목록</p>
+            <div className="room-grid">
+              {rooms.map(room => {
+                const firstPhoto = getFirstPhotoInRoom(data.currentPhase, room.id);
+                const completedSteps = room.steps.filter(s => getStepPhotos(data.currentPhase, room.id, s.id).length > 0).length;
+                const isFullyDone = completedSteps === room.steps.length && room.steps.length > 0;
+                const roomTypeId = room.id.replace(/-\d+$/, '');
+                const roomType = ROOM_TYPES.find(t => t.id === roomTypeId);
+                const roomColor = roomType?.color ?? '#818CF8';
 
-              return (
-                <button key={room.id} className="room-card" onClick={() => enterRoom(room.id)}>
-                  <div
-                    className="room-card-thumb"
-                    style={{ background: `linear-gradient(135deg, ${roomColor}44, ${roomColor}11)` }}
-                  >
-                    {firstPhoto
-                      ? <img src={firstPhoto} className="room-card-photo" />
-                      : <span className="room-card-emoji">{roomType?.emoji ?? '🏠'}</span>
-                    }
-                    {completedSteps === room.steps.length && completedSteps > 0 && (
-                      <div className="room-card-done-badge">
-                        <CheckCircle2 size={12} color="white" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="room-card-body">
-                    <h3>{room.name}</h3>
-                    <p>{completedSteps}/{room.steps.length} 단계</p>
-                    <div className="room-card-bar">
-                      <div
-                        className="room-card-bar-fill"
-                        style={{ width: `${progressPct}%`, background: roomColor }}
-                      />
+                return (
+                  <button key={room.id} className="room-card" onClick={() => enterRoom(room.id)}>
+                    <div
+                      className="room-card-icon-wrap"
+                      style={{ background: `${roomColor}1A` }}
+                    >
+                      {firstPhoto
+                        ? <img src={firstPhoto} className="room-card-photo" />
+                        : <span className="room-card-emoji">{roomType?.emoji ?? '🏠'}</span>
+                      }
+                      {isFullyDone && (
+                        <div className="room-card-done-badge">
+                          <CheckCircle2 size={11} color="white" />
+                        </div>
+                      )}
                     </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+                    <div className="room-card-body">
+                      <h3>{room.name}</h3>
+                      <div className={`room-step-pill ${isFullyDone ? 'done' : ''}`}>
+                        {isFullyDone ? '✓ 완료' : `${completedSteps}/${room.steps.length} 단계`}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
 
-          <div className="finalize-area">
-            <button
-              className="cta-btn"
-              onClick={handleFinalizeReport}
-              disabled={Object.keys(currentPhasePhotos).length === 0}
-            >
-              {data.currentPhase === 'move-in' ? '입주 보고서 생성하기' : '퇴실 비교 분석하기'}
-            </button>
+            <div className="finalize-area">
+              <button
+                className="cta-btn"
+                onClick={handleFinalizeReport}
+                disabled={Object.keys(currentPhasePhotos).length === 0}
+              >
+                {data.currentPhase === 'move-in' ? '입주 보고서 생성하기' : '퇴실 비교 분석하기'}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -349,7 +359,7 @@ export default function App() {
 
           <div className="wizard-bottom-bar">
             <div className="wizard-thumbnail">
-              {lastPhoto ? <img src={lastPhoto} /> : <ImageIcon size={18} />}
+              {lastPhoto ? <img src={lastPhoto} /> : <ImageIcon size={18} color="#CBD5E4" />}
             </div>
             <button className="shutter-btn" onClick={capturePhoto}>
               <div className="shutter-inner" />
@@ -367,39 +377,41 @@ export default function App() {
       {/* ── ANALYZE ── */}
       {view === 'analyze' && (
         <div className="analyze-view">
-          <div className="analyze-header">
-            <h1>하자 분석</h1>
-            <p>이미지를 업로드하면 AI가 하자를 자동으로 분석합니다.</p>
+          <div className="view-hero">
+            <div className="hero-app-name">
+              <ScanLine size={15} color="rgba(255,255,255,0.75)" />
+              <span>하자 분석</span>
+            </div>
+            <h1 className="hero-title">AI 하자 분석</h1>
+            <p className="hero-subtitle">이미지를 업로드하면 AI가 자동으로 분석합니다.</p>
           </div>
-          <div className="analyze-body">
-            <ImageUpload
-              disabled={isAnalyzing}
-              onImageSelect={async (file) => {
-                setAnalyzeResult(null);
-                setAnalyzeError(null);
-                setIsAnalyzing(true);
-                try {
-                  const result = await analyzeImage(file);
-                  setAnalyzeResult(result);
-                } catch (err) {
-                  setAnalyzeError(err instanceof Error ? err.message : '분석에 실패했습니다.');
-                } finally {
-                  setIsAnalyzing(false);
-                }
-              }}
-            />
-            {isAnalyzing && (
-              <div className="analyze-loading">
-                <div className="spinner" />
-                <p>AI 분석 중...</p>
-              </div>
-            )}
-            {analyzeError && (
-              <div className="analyze-error"><p>{analyzeError}</p></div>
-            )}
-            {analyzeResult && !isAnalyzing && (
-              <AnalysisResult result={analyzeResult} />
-            )}
+          <div className="view-shelf">
+            <div className="analyze-body" style={{ padding: '0' }}>
+              <ImageUpload
+                disabled={isAnalyzing}
+                onImageSelect={async (file) => {
+                  setAnalyzeResult(null);
+                  setAnalyzeError(null);
+                  setIsAnalyzing(true);
+                  try {
+                    const result = await analyzeImage(file);
+                    setAnalyzeResult(result);
+                  } catch (err) {
+                    setAnalyzeError(err instanceof Error ? err.message : '분석에 실패했습니다.');
+                  } finally {
+                    setIsAnalyzing(false);
+                  }
+                }}
+              />
+              {isAnalyzing && (
+                <div className="analyze-loading">
+                  <div className="spinner" />
+                  <p>AI 분석 중...</p>
+                </div>
+              )}
+              {analyzeError && <div className="analyze-error"><p>{analyzeError}</p></div>}
+              {analyzeResult && !isAnalyzing && <AnalysisResult result={analyzeResult} />}
+            </div>
           </div>
         </div>
       )}
@@ -418,68 +430,74 @@ export default function App() {
       {/* ── REPORT ── */}
       {view === 'report' && (
         <div className="report-view">
-          <div className="report-success">
-            <div className="report-success-icon">
-              <CheckCircle2 size={36} color="#10b981" />
+          <div className="view-hero">
+            <div className="report-success-inner">
+              <div className="report-success-icon">
+                <CheckCircle2 size={36} color="white" />
+              </div>
+              <h1>{discrepancies.length > 0 ? '분석 완료' : '보고서 저장 완료'}</h1>
+              <p>점검 데이터가 처리되었습니다.</p>
             </div>
-            <h1>{discrepancies.length > 0 ? '분석 완료' : '보고서 저장 완료'}</h1>
-            <p>점검 데이터가 처리되었습니다.</p>
           </div>
 
-          {data.blockchainProof && (
-            <div className="proof-card">
-              <div className="proof-header">
-                <ShieldCheck size={16} />
-                <span>블록체인 검증 완료</span>
-              </div>
-              <div className="proof-body">
-                <div className="proof-item">
-                  <label>Data Hash</label>
-                  <code>{data.blockchainProof.hash.substring(0, 32)}...</code>
+          <div className="view-shelf">
+            {data.blockchainProof && (
+              <div className="proof-card">
+                <div className="proof-header">
+                  <ShieldCheck size={15} />
+                  <span>블록체인 검증 완료</span>
                 </div>
-                <div className="proof-item">
-                  <label>Transaction ID</label>
-                  <code>{data.blockchainProof.txId.substring(0, 32)}...</code>
-                </div>
-                <div className="proof-item">
-                  <label>Timestamp</label>
-                  <span>{new Date(data.blockchainProof.timestamp).toLocaleString()}</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {discrepancies.length > 0 && (
-            <div className="discrepancy-list">
-              <h3>AI 탐지 결과</h3>
-              {discrepancies.map((d, i) => (
-                <div key={i} className={`discrepancy-item ${d.damageLevel}`}>
-                  <div className="item-header">
-                    {d.damageLevel !== 'none' && <AlertTriangle size={16} color={d.damageLevel === 'high' ? '#fb7185' : '#f5a421'} />}
-                    <span className="room-step">{d.roomId} · {d.stepId}</span>
-                    <span className={`badge ${d.damageLevel}`}>{d.damageLevel.toUpperCase()}</span>
+                <div className="proof-body">
+                  <div className="proof-item">
+                    <label>Data Hash</label>
+                    <code>{data.blockchainProof.hash.substring(0, 32)}...</code>
                   </div>
-                  <p>{d.notes}</p>
+                  <div className="proof-item">
+                    <label>Transaction ID</label>
+                    <code>{data.blockchainProof.txId.substring(0, 32)}...</code>
+                  </div>
+                  <div className="proof-item">
+                    <label>Timestamp</label>
+                    <span>{new Date(data.blockchainProof.timestamp).toLocaleString()}</span>
+                  </div>
                 </div>
-              ))}
-            </div>
-          )}
-
-          <div className="report-actions">
-            <button className="primary-btn" onClick={() => setView('hub')}>허브로 돌아가기</button>
-            {data.currentPhase === 'move-out' && (
-              <button
-                className="danger-btn"
-                onClick={async () => {
-                  if (confirm('모든 데이터를 초기화하시겠습니까?')) {
-                    await clearAppData();
-                    window.location.reload();
-                  }
-                }}
-              >
-                새 점검 시작하기
-              </button>
+              </div>
             )}
+
+            {discrepancies.length > 0 && (
+              <div className="discrepancy-list" style={{ marginBottom: '1.25rem' }}>
+                <h3>AI 탐지 결과</h3>
+                {discrepancies.map((d, i) => (
+                  <div key={i} className={`discrepancy-item ${d.damageLevel}`}>
+                    <div className="item-header">
+                      {d.damageLevel !== 'none' && (
+                        <AlertTriangle size={16} color={d.damageLevel === 'high' ? '#f43f5e' : '#f59e0b'} />
+                      )}
+                      <span className="room-step">{d.roomId} · {d.stepId}</span>
+                      <span className={`badge ${d.damageLevel}`}>{d.damageLevel.toUpperCase()}</span>
+                    </div>
+                    <p>{d.notes}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="report-actions">
+              <button className="cta-btn" onClick={() => setView('hub')}>다시 촬영하기</button>
+              {data.currentPhase === 'move-out' && (
+                <button
+                  className="danger-btn"
+                  onClick={async () => {
+                    if (confirm('모든 데이터를 초기화하시겠습니까?')) {
+                      await clearAppData();
+                      window.location.reload();
+                    }
+                  }}
+                >
+                  새 점검 시작하기
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -502,7 +520,7 @@ export default function App() {
           <button
             className="nav-item"
             onClick={() => {
-              if (confirm('방 구성을 다시 설정하시겠습니까? 촬영 데이터는 유지됩니다.')) {
+              if (confirm('방 구성을 다시 설정하시겠습니까?')) {
                 setSetupCounts(Object.fromEntries(ROOM_TYPES.map(t => [t.id, 0])));
                 setData(prev => { const next = { ...prev }; delete next.roomConfig; return next; });
                 setView('setup');
