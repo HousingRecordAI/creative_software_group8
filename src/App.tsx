@@ -1,15 +1,15 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Camera, FileText, Settings, ArrowLeft, CheckCircle2, ChevronRight, Image as ImageIcon, ShieldCheck, AlertTriangle, ScanLine, Home, Layers, RotateCcw } from 'lucide-react';
 import walkthroughData from './walkthrough.json';
-import { loadAppData, saveAppData, clearAppData, type PersistentData, type InspectionPhase } from './lib/storage';
-import { computeHash } from './lib/hash';
-import { submitMoveInReport, submitMoveOutReport, analyzeImage, type DiscrepancyResult, type AnalysisData } from './lib/api';
+import { loadAppData, saveAppData, clearAppData, type CapturePlan, type CaptureReview, type GuidedCaptureStep, type PersistentData, type InspectionPhase } from './lib/storage';
+import { anchorInspectionEvidence, verifyInspectionEvidence, type VerificationResult } from './lib/blockchain';
+import { generateCapturePlanFromOverview, reviewGuidedCapture, submitMoveOutReport, analyzeImage, type DiscrepancyResult, type AnalysisData } from './lib/api';
 import ImageUpload from './components/ImageUpload';
 import AnalysisResult from './components/AnalysisResult';
 
 type AppState = 'setup' | 'hub' | 'wizard' | 'report' | 'processing' | 'analyze';
 
-type Room = { id: string; name: string; steps: { id: string; label: string; guide: string }[] };
+type Room = { id: string; name: string; steps: GuidedCaptureStep[] };
 type CaptureQuality = { status: 'checking' | 'good' | 'warn'; message: string };
 
 const ROOM_TYPES = [
@@ -19,10 +19,26 @@ const ROOM_TYPES = [
   { id: 'living-room', label: '거실',  emoji: '🛋', color: '#34D399' },
 ];
 
-function getFrameGuideClass(stepId: string) {
+function getFrameGuideClass(step: GuidedCaptureStep) {
+  if (step.angle) return step.angle;
+  const stepId = step.id;
   if (stepId.includes('floor')) return 'low';
   if (stepId.includes('windows') || stepId.includes('fixtures') || stepId.includes('sink')) return 'detail';
   return 'wide';
+}
+
+function getOverviewStep(room: Room): GuidedCaptureStep {
+  return {
+    id: 'overview',
+    label: '전체 샷',
+    guide: `${room.name}의 구조와 주요 설비가 한눈에 보이도록 한 걸음 물러서서 찍어주세요.`,
+    target: room.name,
+    angle: 'wide'
+  };
+}
+
+function getCaptureSteps(room: Room, plan?: { tasks: GuidedCaptureStep[] }) {
+  return [getOverviewStep(room), ...(plan?.tasks?.length ? plan.tasks : room.steps)];
 }
 
 function analyzeCaptureFrame(video: HTMLVideoElement, canvas: HTMLCanvasElement): CaptureQuality {
@@ -83,6 +99,9 @@ export default function App() {
   const [captureQuality, setCaptureQuality] = useState<CaptureQuality>({ status: 'checking', message: '카메라 준비 중' });
   const [showReferenceOverlay, setShowReferenceOverlay] = useState(true);
   const [captureFlash, setCaptureFlash] = useState(false);
+  const [isGeneratingGuide, setIsGeneratingGuide] = useState(false);
+  const [isReviewingCapture, setIsReviewingCapture] = useState(false);
+  const [proofVerification, setProofVerification] = useState<VerificationResult | null>(null);
   const [setupCounts, setSetupCounts] = useState<Record<string, number>>(
     Object.fromEntries(ROOM_TYPES.map(t => [t.id, 0]))
   );
@@ -110,12 +129,22 @@ export default function App() {
   }, [data.roomConfig]);
 
   const currentRoom = useMemo(() => rooms.find(r => r.id === selectedRoomId), [selectedRoomId, rooms]);
-  const currentStep = useMemo(() => currentRoom?.steps[currentStepIndex], [currentRoom, currentStepIndex]);
+  const currentPlan = selectedRoomId
+    ? data.capturePlans?.[data.currentPhase]?.[selectedRoomId] || data.capturePlans?.['move-in']?.[selectedRoomId]
+    : undefined;
+  const currentSteps = useMemo(
+    () => currentRoom ? getCaptureSteps(currentRoom, currentPlan) : [],
+    [currentRoom, currentPlan]
+  );
+  const currentStep = useMemo(() => currentSteps[currentStepIndex], [currentSteps, currentStepIndex]);
+  const currentReview = selectedRoomId && currentStep
+    ? data.captureReviews?.[data.currentPhase]?.[selectedRoomId]?.[currentStep.id]
+    : undefined;
   const referencePhoto = useMemo(() => {
     if (data.currentPhase !== 'move-out' || !selectedRoomId || !currentStep) return null;
     return data.photos['move-in']?.[selectedRoomId]?.[currentStep.id]?.[0] ?? null;
   }, [data.currentPhase, data.photos, selectedRoomId, currentStep]);
-  const frameGuideClass = currentStep ? getFrameGuideClass(currentStep.id) : 'wide';
+  const frameGuideClass = currentStep ? getFrameGuideClass(currentStep) : 'wide';
 
   useEffect(() => {
     loadAppData().then(loadedData => {
@@ -158,6 +187,36 @@ export default function App() {
     setShowReferenceOverlay(Boolean(referencePhoto));
   }, [referencePhoto, currentStepIndex]);
 
+  useEffect(() => {
+    if (currentStepIndex >= currentSteps.length && currentSteps.length > 0) {
+      setCurrentStepIndex(currentSteps.length - 1);
+    }
+  }, [currentStepIndex, currentSteps.length]);
+
+  useEffect(() => {
+    if (!data.blockchainProof) {
+      setProofVerification(null);
+      return;
+    }
+
+    let cancelled = false;
+    verifyInspectionEvidence(data.blockchainProof, data.photos['move-in'])
+      .then(result => {
+        if (!cancelled) setProofVerification(result);
+      })
+      .catch(error => {
+        if (!cancelled) {
+          setProofVerification({
+            isValid: false,
+            title: '검증 실패',
+            detail: error instanceof Error ? error.message : '로컬 체인 검증 중 오류가 발생했습니다.'
+          });
+        }
+      });
+
+    return () => { cancelled = true; };
+  }, [data.blockchainProof, data.photos]);
+
   const handleSetupConfirm = () => {
     const config: Record<string, number> = {};
     for (const [key, value] of Object.entries(setupCounts)) {
@@ -169,7 +228,36 @@ export default function App() {
 
   const enterRoom = (id: string) => { setSelectedRoomId(id); setCurrentStepIndex(0); setView('wizard'); };
 
-  const capturePhoto = () => {
+  const saveCapturePlan = (phase: InspectionPhase, roomId: string, plan: CapturePlan) => {
+    setData(prev => ({
+      ...prev,
+      capturePlans: {
+        ...prev.capturePlans,
+        [phase]: {
+          ...(prev.capturePlans?.[phase] || {}),
+          [roomId]: plan
+        }
+      }
+    }));
+  };
+
+  const saveCaptureReview = (phase: InspectionPhase, roomId: string, stepId: string, review: CaptureReview) => {
+    setData(prev => ({
+      ...prev,
+      captureReviews: {
+        ...prev.captureReviews,
+        [phase]: {
+          ...(prev.captureReviews?.[phase] || {}),
+          [roomId]: {
+            ...(prev.captureReviews?.[phase]?.[roomId] || {}),
+            [stepId]: review
+          }
+        }
+      }
+    }));
+  };
+
+  const capturePhoto = async () => {
     if (!selectedRoomId || !currentStep || !videoRef.current || !canvasRef.current) return;
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -194,6 +282,38 @@ export default function App() {
         }
       };
     });
+
+    if (currentStep.id === 'overview' && currentRoom && (data.currentPhase === 'move-in' || !currentPlan)) {
+      setIsGeneratingGuide(true);
+      try {
+        const plan = await generateCapturePlanFromOverview({
+          roomName: currentRoom.name,
+          roomTypeId: selectedRoomId,
+          imageDataUrl: newPhoto
+        });
+        saveCapturePlan(data.currentPhase, selectedRoomId, plan);
+        setCurrentStepIndex(1);
+      } finally {
+        setIsGeneratingGuide(false);
+      }
+      return;
+    }
+
+    if (currentStep.id === 'overview') return;
+
+    if (currentRoom) {
+      setIsReviewingCapture(true);
+      try {
+        const review = await reviewGuidedCapture({
+          roomName: currentRoom.name,
+          step: currentStep,
+          imageDataUrl: newPhoto
+        });
+        saveCaptureReview(data.currentPhase, selectedRoomId, currentStep.id, review);
+      } finally {
+        setIsReviewingCapture(false);
+      }
+    }
   };
 
   const removeLastPhoto = () => {
@@ -215,13 +335,28 @@ export default function App() {
               [currentStep.id]: stepPhotos.slice(0, -1)
             }
           }
+        },
+        captureReviews: {
+          ...prev.captureReviews,
+          [phase]: {
+            ...(prev.captureReviews?.[phase] || {}),
+            [selectedRoomId]: {
+              ...(prev.captureReviews?.[phase]?.[selectedRoomId] || {}),
+              [currentStep.id]: {
+                status: 'saved',
+                message: '마지막 사진을 제거했습니다. 다시 촬영해 주세요.',
+                source: 'fallback',
+                reviewedAt: Date.now()
+              }
+            }
+          }
         }
       };
     });
   };
 
   const nextStep = () => {
-    if (currentRoom && currentStepIndex < currentRoom.steps.length - 1) {
+    if (currentStepIndex < currentSteps.length - 1) {
       setCurrentStepIndex(prev => prev + 1);
     } else {
       setView('hub');
@@ -244,18 +379,10 @@ export default function App() {
     setView('processing');
     try {
       if (data.currentPhase === 'move-in') {
-        const imageHashes: Record<string, string> = {};
-        const moveInPhotos = data.photos['move-in'];
-        for (const roomId in moveInPhotos) {
-          for (const stepId in moveInPhotos[roomId]) {
-            const photos = moveInPhotos[roomId][stepId];
-            if (photos.length > 0) imageHashes[`${roomId}-${stepId}`] = await computeHash(photos[0]);
-          }
-        }
-        const response = await submitMoveInReport({
-          timestamp: Date.now(),
+        const response = await anchorInspectionEvidence({
+          phase: 'move-in',
+          photos: data.photos['move-in'],
           metadata: { rooms: rooms.map(r => ({ id: r.id, name: r.name })) },
-          imageHashes
         });
         setData(prev => ({ ...prev, blockchainProof: response, currentPhase: 'move-out' }));
       } else {
@@ -285,9 +412,11 @@ export default function App() {
   const currentPhotos = selectedRoomId && currentStep ? getStepPhotos(data.currentPhase, selectedRoomId, currentStep.id) : [];
   const lastPhoto = currentPhotos[currentPhotos.length - 1];
 
-  const totalCompleted = rooms.filter(room =>
-    room.steps.length > 0 && room.steps.every(s => getStepPhotos(data.currentPhase, room.id, s.id).length > 0)
-  ).length;
+  const totalCompleted = rooms.filter(room => {
+    const plan = data.capturePlans?.[data.currentPhase]?.[room.id] || data.capturePlans?.['move-in']?.[room.id];
+    const steps = getCaptureSteps(room, plan);
+    return steps.length > 0 && steps.every(s => getStepPhotos(data.currentPhase, room.id, s.id).length > 0);
+  }).length;
 
   return (
     <div className="app">
@@ -373,8 +502,10 @@ export default function App() {
             <div className="room-grid">
               {rooms.map(room => {
                 const firstPhoto = getFirstPhotoInRoom(data.currentPhase, room.id);
-                const completedSteps = room.steps.filter(s => getStepPhotos(data.currentPhase, room.id, s.id).length > 0).length;
-                const isFullyDone = completedSteps === room.steps.length && room.steps.length > 0;
+                const plan = data.capturePlans?.[data.currentPhase]?.[room.id] || data.capturePlans?.['move-in']?.[room.id];
+                const roomSteps = getCaptureSteps(room, plan);
+                const completedSteps = roomSteps.filter(s => getStepPhotos(data.currentPhase, room.id, s.id).length > 0).length;
+                const isFullyDone = completedSteps === roomSteps.length && roomSteps.length > 0;
                 const roomTypeId = room.id.replace(/-\d+$/, '');
                 const roomType = ROOM_TYPES.find(t => t.id === roomTypeId);
                 const roomColor = roomType?.color ?? '#818CF8';
@@ -398,7 +529,7 @@ export default function App() {
                     <div className="room-card-body">
                       <h3>{room.name}</h3>
                       <div className={`room-step-pill ${isFullyDone ? 'done' : ''}`}>
-                        {isFullyDone ? '✓ 완료' : `${completedSteps}/${room.steps.length} 단계`}
+                        {isFullyDone ? '✓ 완료' : `${completedSteps}/${roomSteps.length} 단계`}
                       </div>
                     </div>
                   </button>
@@ -412,7 +543,7 @@ export default function App() {
                 onClick={handleFinalizeReport}
                 disabled={Object.keys(currentPhasePhotos).length === 0}
               >
-                {data.currentPhase === 'move-in' ? '입주 보고서 생성하기' : '퇴실 비교 분석하기'}
+                {data.currentPhase === 'move-in' ? '증거 root 로컬 체인에 고정하기' : '퇴실 비교 분석하기'}
               </button>
             </div>
           </div>
@@ -444,7 +575,7 @@ export default function App() {
             </div>
 
             <div className="wizard-step-dots">
-              {currentRoom.steps.map((_, i) => (
+              {currentSteps.map((_, i) => (
                 <div
                   key={i}
                   className={`step-dot ${i < currentStepIndex ? 'done' : i === currentStepIndex ? 'active' : ''}`}
@@ -488,9 +619,32 @@ export default function App() {
             <div className="wizard-guide">
               <div className="wizard-guide-meta">
                 <span className="wizard-guide-label">{currentStep.label}</span>
-                <span>{currentStepIndex + 1}/{currentRoom.steps.length}</span>
+                <span>{currentStepIndex + 1}/{currentSteps.length}</span>
               </div>
               <p>{currentStep.guide}</p>
+              {currentPlan?.summary && currentStep.id !== 'overview' && (
+                <div className={`guide-plan-badge ${currentPlan.source}`}>
+                  {currentPlan.source === 'ai' ? 'AI 촬영 목록' : '기본 촬영 목록'} · {currentPlan.summary}
+                </div>
+              )}
+              {isGeneratingGuide && (
+                <div className="capture-review pending">
+                  <div className="mini-spinner" />
+                  <span>AI가 전체 샷을 보고 추가 촬영 목록을 만드는 중입니다.</span>
+                </div>
+              )}
+              {isReviewingCapture && (
+                <div className="capture-review pending">
+                  <div className="mini-spinner" />
+                  <span>사진이 증거로 충분한지 확인하는 중입니다.</span>
+                </div>
+              )}
+              {currentReview && !isReviewingCapture && (
+                <div className={`capture-review ${currentReview.status}`}>
+                  <span>{currentReview.message}</span>
+                  {currentReview.hint && <small>{currentReview.hint}</small>}
+                </div>
+              )}
             </div>
           </div>
 
@@ -510,11 +664,11 @@ export default function App() {
                 </span>
               )}
             </button>
-            <button className="shutter-btn" onClick={capturePhoto}>
+            <button className="shutter-btn" onClick={capturePhoto} disabled={isGeneratingGuide || isReviewingCapture}>
               <div className="shutter-inner" />
             </button>
             <button className="wizard-next-btn" onClick={nextStep}>
-              {currentStepIndex === currentRoom.steps.length - 1
+              {currentStepIndex === currentSteps.length - 1
                 ? <CheckCircle2 size={20} color="white" />
                 : <ChevronRight size={20} color="white" />
               }
@@ -571,7 +725,7 @@ export default function App() {
           <div className="processing-orb">
             <div className="spinner" />
           </div>
-          <h2>{data.currentPhase === 'move-out' ? '블록체인 저장 중...' : 'AI 분석 중...'}</h2>
+          <h2>{data.currentPhase === 'move-in' ? '로컬 체인에 증거 고정 중...' : 'AI 비교 분석 중...'}</h2>
           <p>데이터를 안전하게 처리하고 있습니다.</p>
         </div>
       )}
@@ -594,21 +748,37 @@ export default function App() {
               <div className="proof-card">
                 <div className="proof-header">
                   <ShieldCheck size={15} />
-                  <span>블록체인 검증 완료</span>
+                  <span>{data.blockchainProof.chainName || '로컬 블록체인'} 앵커 완료</span>
                 </div>
                 <div className="proof-body">
                   <div className="proof-item">
-                    <label>Data Hash</label>
-                    <code>{data.blockchainProof.hash.substring(0, 32)}...</code>
+                    <label>Evidence Root</label>
+                    <code>{(data.blockchainProof.rootHash || data.blockchainProof.hash).substring(0, 34)}...</code>
                   </div>
                   <div className="proof-item">
-                    <label>Transaction ID</label>
-                    <code>{data.blockchainProof.txId.substring(0, 32)}...</code>
+                    <label>Local Tx</label>
+                    <code>{data.blockchainProof.txId.substring(0, 34)}...</code>
+                  </div>
+                  {data.blockchainProof.blockHash && (
+                    <div className="proof-item">
+                      <label>Block</label>
+                      <code>#{data.blockchainProof.blockHeight} · {data.blockchainProof.blockHash.substring(0, 34)}...</code>
+                    </div>
+                  )}
+                  <div className="proof-item">
+                    <label>Records</label>
+                    <span>{data.blockchainProof.recordCount ?? 0} photos anchored</span>
                   </div>
                   <div className="proof-item">
                     <label>Timestamp</label>
                     <span>{new Date(data.blockchainProof.timestamp).toLocaleString()}</span>
                   </div>
+                  {proofVerification && (
+                    <div className={`proof-verification ${proofVerification.isValid ? 'valid' : 'invalid'}`}>
+                      <strong>{proofVerification.title}</strong>
+                      <span>{proofVerification.detail}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

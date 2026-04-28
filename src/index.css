@@ -634,6 +634,60 @@ button:disabled { opacity: 0.36; cursor: not-allowed; }
   color: rgba(255,255,255,0.9);
   line-height: 1.5;
 }
+.guide-plan-badge {
+  margin-top: 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.8rem;
+  background: rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.82);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+.guide-plan-badge.ai {
+  background: rgba(147,197,253,0.18);
+  color: #dbeafe;
+}
+.capture-review {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.1);
+  color: white;
+}
+.capture-review small {
+  color: rgba(255,255,255,0.72);
+  font-size: 0.7rem;
+}
+.capture-review.pass {
+  background: rgba(34,198,142,0.24);
+  border-color: rgba(110,231,183,0.35);
+}
+.capture-review.retry {
+  background: rgba(255,212,79,0.2);
+  border-color: rgba(255,212,79,0.4);
+}
+.capture-review.saved {
+  background: rgba(147,197,253,0.16);
+  border-color: rgba(147,197,253,0.3);
+}
+.capture-review.pending {
+  flex-direction: row;
+  align-items: center;
+}
+.mini-spinner {
+  width: 1rem; height: 1rem;
+  border: 2px solid rgba(255,255,255,0.28);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.85s linear infinite;
+  flex: 0 0 auto;
+}
 
 .wizard-bottom-bar {
   height: 8rem;
@@ -881,6 +935,29 @@ button:disabled { opacity: 0.36; cursor: not-allowed; }
   font-size: 0.78rem; word-break: break-all; color: #059669;
 }
 .proof-item span { font-size: 0.875rem; color: #059669; }
+.proof-verification {
+  margin-top: 1rem;
+  padding: 0.85rem;
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.proof-verification.valid {
+  background: rgba(34,198,142,0.08);
+  border: 1px solid rgba(34,198,142,0.22);
+  color: #047857;
+}
+.proof-verification.invalid {
+  background: rgba(244,63,94,0.08);
+  border: 1px solid rgba(244,63,94,0.22);
+  color: #be123c;
+}
+.proof-verification span {
+  color: inherit;
+}
 
 .discrepancy-list { margin-bottom: 0; }
 .discrepancy-list h3 {
