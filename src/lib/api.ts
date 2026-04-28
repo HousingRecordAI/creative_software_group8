@@ -9,8 +9,24 @@ export interface AnalysisData {
   summary: string;
 }
 
-export async function analyzeImage(file: File): Promise<AnalysisData> {
-  const base64 = await new Promise<string>((resolve, reject) => {
+const OLLAMA_URL = '/api/ollama/api/generate';
+const MODEL_NAME = import.meta.env.VITE_OLLAMA_MODEL || 'gemma4:e4b';
+
+const DEFECT_ANALYSIS_PROMPT = `이 사진에서 다음 항목들을 한국어로 분석해줘:
+1. 발견된 하자 목록 (곰팡이, 스크래치, 균열, 누수, 변색 등)
+2. 각 하자의 위치와 심각도 (경미/보통/심각)
+3. 하자가 없으면 defects를 빈 배열로 반환
+
+아래 JSON 형식으로만 반환해줘:
+{
+  "defects": [
+    { "type": "하자종류", "location": "위치", "severity": "경미|보통|심각" }
+  ],
+  "summary": "전체 요약"
+}`;
+
+async function readFileAsBase64(file: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
@@ -19,19 +35,54 @@ export async function analyzeImage(file: File): Promise<AnalysisData> {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
 
-  const response = await fetch('/api/analyze', {
+async function readErrorBody(response: Response): Promise<string> {
+  const body = await response.text();
+  try {
+    const parsed = JSON.parse(body);
+    return parsed.error || body;
+  } catch {
+    return body;
+  }
+}
+
+function parseAnalysisData(rawText: string): AnalysisData {
+  const match = rawText.match(/\{[\s\S]*\}/);
+  try {
+    const parsed = JSON.parse(match?.[0] ?? rawText);
+    return {
+      defects: Array.isArray(parsed.defects) ? parsed.defects : [],
+      summary: typeof parsed.summary === 'string' ? parsed.summary : '분석 결과 요약이 없습니다.'
+    };
+  } catch {
+    return { defects: [], summary: '분석 결과를 파싱할 수 없습니다.' };
+  }
+}
+
+export async function analyzeImage(file: File): Promise<AnalysisData> {
+  const base64 = await readFileAsBase64(file);
+
+  const response = await fetch(OLLAMA_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image: base64, mediaType: file.type }),
+    body: JSON.stringify({
+      model: MODEL_NAME,
+      prompt: DEFECT_ANALYSIS_PROMPT,
+      images: [base64],
+      stream: false,
+      format: 'json',
+      options: { temperature: 0.1 }
+    }),
   });
 
   if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(err.error ?? `HTTP ${response.status}`);
+    const errorBody = await readErrorBody(response);
+    throw new Error(`Ollama failed with status ${response.status}: ${errorBody}`);
   }
 
-  return response.json();
+  const data = await response.json();
+  return parseAnalysisData(data.response || '{}');
 }
 
 /**
@@ -52,9 +103,6 @@ export interface DiscrepancyResult {
   damageLevel: 'none' | 'low' | 'high';
   notes: string;
 }
-
-const OLLAMA_URL = '/api/ollama/api/generate';
-const MODEL_NAME = 'gemma4:latest';
 
 /**
  * Submits the move-in report for blockchain anchoring.
@@ -106,6 +154,7 @@ Output format (REQUIRED):
         try {
           const response = await fetch(OLLAMA_URL, {
             method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               model: MODEL_NAME,
               prompt: prompt,
@@ -116,7 +165,7 @@ Output format (REQUIRED):
           });
 
           if (!response.ok) {
-            const errorBody = await response.text();
+            const errorBody = await readErrorBody(response);
             console.error(`Ollama Error ${response.status}:`, errorBody);
             throw new Error(`Ollama failed with status ${response.status}: ${errorBody}`);
           }

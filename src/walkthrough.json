@@ -3,38 +3,38 @@
   "rooms": [
     {
       "id": "bedroom",
-      "name": "Bedroom",
+      "name": "방",
       "steps": [
-        { "id": "walls", "label": "Walls & Ceiling", "guide": "Capture scuffs, holes, or water stains." },
-        { "id": "floor", "label": "Flooring & Carpet", "guide": "Focus on stains or loose tiles." },
-        { "id": "windows", "label": "Windows & Blinds", "guide": "Check for cracks or broken slats." }
+        { "id": "walls", "label": "벽과 천장", "guide": "벽 전체와 천장 모서리가 함께 보이도록 찍어주세요." },
+        { "id": "floor", "label": "바닥", "guide": "바닥 얼룩, 긁힘, 들뜸이 보이도록 한 걸음 물러서서 찍어주세요." },
+        { "id": "windows", "label": "창문과 블라인드", "guide": "창틀, 유리, 블라인드 파손이 한 화면에 들어오게 맞춰주세요." }
       ]
     },
     {
       "id": "kitchen",
-      "name": "Kitchen",
+      "name": "부엌",
       "steps": [
-        { "id": "appliances", "label": "Appliances", "guide": "Open oven and fridge. Capture any grime or damage." },
-        { "id": "cabinets", "label": "Cabinets & Counters", "guide": "Capture chips, scratches, or loose hinges." },
-        { "id": "sink", "label": "Sink & Plumping", "guide": "Capture drips or rust." }
+        { "id": "appliances", "label": "가전", "guide": "오븐, 냉장고, 인덕션 표면의 오염이나 파손이 보이게 찍어주세요." },
+        { "id": "cabinets", "label": "수납장과 상판", "guide": "문짝, 경첩, 상판의 찍힘과 긁힘이 보이도록 정면에서 찍어주세요." },
+        { "id": "sink", "label": "싱크대와 배관", "guide": "수전, 배수구, 하부 배관의 누수나 녹이 보이게 가까이 찍어주세요." }
       ]
     },
     {
       "id": "bathroom",
-      "name": "Bathroom",
+      "name": "화장실",
       "steps": [
-        { "id": "tiles", "label": "Tiles & Grout", "guide": "Capture mold or cracked tiles." },
-        { "id": "fixtures", "label": "Fixtures & Mirror", "guide": "Capture water spots or chips." },
-        { "id": "shower", "label": "Shower & Tub", "guide": "Check for drainage issues or stains." }
+        { "id": "tiles", "label": "타일과 줄눈", "guide": "곰팡이, 금 간 타일, 변색된 줄눈이 보이도록 벽면을 넓게 찍어주세요." },
+        { "id": "fixtures", "label": "수전과 거울", "guide": "거울 모서리, 수전, 세면대의 물때와 깨짐이 보이게 찍어주세요." },
+        { "id": "shower", "label": "샤워부스와 욕조", "guide": "배수구, 실리콘, 욕조 표면의 얼룩이나 파손을 함께 찍어주세요." }
       ]
     },
     {
       "id": "living-room",
-      "name": "Living Room",
+      "name": "거실",
       "steps": [
-        { "id": "walls", "label": "Walls & Ceiling", "guide": "Capture scuffs, holes, or water stains." },
-        { "id": "floor", "label": "Flooring", "guide": "Focus on scratches or loose tiles." },
-        { "id": "windows", "label": "Windows", "guide": "Check for cracks or dirt." }
+        { "id": "walls", "label": "벽과 천장", "guide": "못 자국, 얼룩, 균열이 빠지지 않도록 벽 전체를 넓게 찍어주세요." },
+        { "id": "floor", "label": "바닥", "guide": "마루 긁힘, 들뜸, 변색이 보이도록 빛 반사를 피해서 찍어주세요." },
+        { "id": "windows", "label": "창문", "guide": "창틀과 유리의 금, 오염, 방충망 상태가 보이도록 찍어주세요." }
       ]
     }
   ]

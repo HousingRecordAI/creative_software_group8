@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Camera, FileText, Settings, ArrowLeft, CheckCircle2, ChevronRight, Image as ImageIcon, ShieldCheck, AlertTriangle, ScanLine, Home } from 'lucide-react';
+import { Camera, FileText, Settings, ArrowLeft, CheckCircle2, ChevronRight, Image as ImageIcon, ShieldCheck, AlertTriangle, ScanLine, Home, Layers, RotateCcw } from 'lucide-react';
 import walkthroughData from './walkthrough.json';
 import { loadAppData, saveAppData, clearAppData, type PersistentData, type InspectionPhase } from './lib/storage';
 import { computeHash } from './lib/hash';
@@ -10,6 +10,7 @@ import AnalysisResult from './components/AnalysisResult';
 type AppState = 'setup' | 'hub' | 'wizard' | 'report' | 'processing' | 'analyze';
 
 type Room = { id: string; name: string; steps: { id: string; label: string; guide: string }[] };
+type CaptureQuality = { status: 'checking' | 'good' | 'warn'; message: string };
 
 const ROOM_TYPES = [
   { id: 'bedroom',     label: '방',    emoji: '🛏', color: '#818CF8' },
@@ -17,6 +18,55 @@ const ROOM_TYPES = [
   { id: 'kitchen',     label: '부엌',  emoji: '🍳', color: '#FB923C' },
   { id: 'living-room', label: '거실',  emoji: '🛋', color: '#34D399' },
 ];
+
+function getFrameGuideClass(stepId: string) {
+  if (stepId.includes('floor')) return 'low';
+  if (stepId.includes('windows') || stepId.includes('fixtures') || stepId.includes('sink')) return 'detail';
+  return 'wide';
+}
+
+function analyzeCaptureFrame(video: HTMLVideoElement, canvas: HTMLCanvasElement): CaptureQuality {
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth === 0) {
+    return { status: 'checking', message: '카메라 준비 중' };
+  }
+
+  const width = 80;
+  const height = 60;
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return { status: 'checking', message: '화면 확인 중' };
+
+  ctx.drawImage(video, 0, 0, width, height);
+  const pixels = ctx.getImageData(0, 0, width, height).data;
+  const luma = new Array<number>(width * height);
+  let total = 0;
+
+  for (let i = 0, p = 0; i < pixels.length; i += 4, p += 1) {
+    const value = (pixels[i] * 0.2126) + (pixels[i + 1] * 0.7152) + (pixels[i + 2] * 0.0722);
+    luma[p] = value;
+    total += value;
+  }
+
+  const brightness = total / luma.length;
+  let edgeTotal = 0;
+  let edgeCount = 0;
+  for (let y = 1; y < height; y += 2) {
+    for (let x = 1; x < width; x += 2) {
+      const index = y * width + x;
+      edgeTotal += Math.abs(luma[index] - luma[index - 1]);
+      edgeTotal += Math.abs(luma[index] - luma[index - width]);
+      edgeCount += 2;
+    }
+  }
+
+  const edgeScore = edgeTotal / edgeCount;
+  if (brightness < 45) return { status: 'warn', message: '조명이 어두워요' };
+  if (brightness > 232) return { status: 'warn', message: '빛이 너무 강해요' };
+  if (edgeScore < 3) return { status: 'warn', message: '초점을 맞춰주세요' };
+  return { status: 'good', message: '촬영 준비 완료' };
+}
 
 export default function App() {
   const [view, setView] = useState<AppState>('hub');
@@ -30,6 +80,9 @@ export default function App() {
   const [analyzeResult, setAnalyzeResult] = useState<AnalysisData | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+  const [captureQuality, setCaptureQuality] = useState<CaptureQuality>({ status: 'checking', message: '카메라 준비 중' });
+  const [showReferenceOverlay, setShowReferenceOverlay] = useState(true);
+  const [captureFlash, setCaptureFlash] = useState(false);
   const [setupCounts, setSetupCounts] = useState<Record<string, number>>(
     Object.fromEntries(ROOM_TYPES.map(t => [t.id, 0]))
   );
@@ -58,6 +111,11 @@ export default function App() {
 
   const currentRoom = useMemo(() => rooms.find(r => r.id === selectedRoomId), [selectedRoomId, rooms]);
   const currentStep = useMemo(() => currentRoom?.steps[currentStepIndex], [currentRoom, currentStepIndex]);
+  const referencePhoto = useMemo(() => {
+    if (data.currentPhase !== 'move-out' || !selectedRoomId || !currentStep) return null;
+    return data.photos['move-in']?.[selectedRoomId]?.[currentStep.id]?.[0] ?? null;
+  }, [data.currentPhase, data.photos, selectedRoomId, currentStep]);
+  const frameGuideClass = currentStep ? getFrameGuideClass(currentStep.id) : 'wide';
 
   useEffect(() => {
     loadAppData().then(loadedData => {
@@ -81,6 +139,25 @@ export default function App() {
     return () => { stream?.getTracks().forEach(t => t.stop()); };
   }, [view]);
 
+  useEffect(() => {
+    if (view !== 'wizard') return;
+    setCaptureQuality({ status: 'checking', message: '카메라 준비 중' });
+
+    const intervalId = window.setInterval(() => {
+      if (!videoRef.current || !canvasRef.current) return;
+      const nextQuality = analyzeCaptureFrame(videoRef.current, canvasRef.current);
+      setCaptureQuality(prev =>
+        prev.status === nextQuality.status && prev.message === nextQuality.message ? prev : nextQuality
+      );
+    }, 1100);
+
+    return () => window.clearInterval(intervalId);
+  }, [view, currentStepIndex, selectedRoomId]);
+
+  useEffect(() => {
+    setShowReferenceOverlay(Boolean(referencePhoto));
+  }, [referencePhoto, currentStepIndex]);
+
   const handleSetupConfirm = () => {
     const config: Record<string, number> = {};
     for (const [key, value] of Object.entries(setupCounts)) {
@@ -102,6 +179,8 @@ export default function App() {
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const newPhoto = canvas.toDataURL('image/jpeg', 0.8);
+    setCaptureFlash(true);
+    window.setTimeout(() => setCaptureFlash(false), 180);
     setData(prev => {
       const phase = prev.currentPhase;
       const phasePhotos = prev.photos[phase] || {};
@@ -112,6 +191,30 @@ export default function App() {
         photos: {
           ...prev.photos,
           [phase]: { ...phasePhotos, [selectedRoomId]: { ...roomPhotos, [currentStep.id]: [...stepPhotos, newPhoto] } }
+        }
+      };
+    });
+  };
+
+  const removeLastPhoto = () => {
+    if (!selectedRoomId || !currentStep) return;
+    setData(prev => {
+      const phase = prev.currentPhase;
+      const phasePhotos = prev.photos[phase] || {};
+      const roomPhotos = phasePhotos[selectedRoomId] || {};
+      const stepPhotos = roomPhotos[currentStep.id] || [];
+      if (stepPhotos.length === 0) return prev;
+      return {
+        ...prev,
+        photos: {
+          ...prev.photos,
+          [phase]: {
+            ...phasePhotos,
+            [selectedRoomId]: {
+              ...roomPhotos,
+              [currentStep.id]: stepPhotos.slice(0, -1)
+            }
+          }
         }
       };
     });
@@ -327,7 +430,17 @@ export default function App() {
               <div className="wizard-title">
                 <h2>{currentRoom.name}</h2>
               </div>
-              <div style={{ width: 40 }} />
+              {referencePhoto ? (
+                <button
+                  className={`wizard-icon-btn ${showReferenceOverlay ? 'active' : ''}`}
+                  onClick={() => setShowReferenceOverlay(prev => !prev)}
+                  aria-label="입주 기준 사진 보기"
+                >
+                  <Layers size={19} />
+                </button>
+              ) : (
+                <div style={{ width: 40 }} />
+              )}
             </div>
 
             <div className="wizard-step-dots">
@@ -337,6 +450,16 @@ export default function App() {
                   className={`step-dot ${i < currentStepIndex ? 'done' : i === currentStepIndex ? 'active' : ''}`}
                 />
               ))}
+            </div>
+
+            <div className={`quality-chip ${captureQuality.status}`}>
+              {captureQuality.status === 'good'
+                ? <CheckCircle2 size={15} />
+                : captureQuality.status === 'warn'
+                  ? <AlertTriangle size={15} />
+                  : <Camera size={15} />
+              }
+              <span>{captureQuality.message}</span>
             </div>
 
             {cameraError ? (
@@ -349,8 +472,24 @@ export default function App() {
               <video ref={videoRef} autoPlay playsInline />
             )}
 
+            {referencePhoto && showReferenceOverlay && (
+              <img src={referencePhoto} alt="" className="wizard-reference-overlay" />
+            )}
+
+            <div className={`wizard-frame ${frameGuideClass}`} aria-hidden="true">
+              <span className="frame-corner tl" />
+              <span className="frame-corner tr" />
+              <span className="frame-corner bl" />
+              <span className="frame-corner br" />
+            </div>
+
+            {captureFlash && <div className="capture-flash" />}
+
             <div className="wizard-guide">
-              <div className="wizard-guide-label">{currentStep.label}</div>
+              <div className="wizard-guide-meta">
+                <span className="wizard-guide-label">{currentStep.label}</span>
+                <span>{currentStepIndex + 1}/{currentRoom.steps.length}</span>
+              </div>
               <p>{currentStep.guide}</p>
             </div>
           </div>
@@ -358,9 +497,19 @@ export default function App() {
           <canvas ref={canvasRef} style={{ display: 'none' }} />
 
           <div className="wizard-bottom-bar">
-            <div className="wizard-thumbnail">
+            <button
+              className={`wizard-thumbnail ${lastPhoto ? 'has-photo' : ''}`}
+              onClick={removeLastPhoto}
+              disabled={!lastPhoto}
+              aria-label="마지막 사진 삭제"
+            >
               {lastPhoto ? <img src={lastPhoto} /> : <ImageIcon size={18} color="#CBD5E4" />}
-            </div>
+              {lastPhoto && (
+                <span className="thumbnail-retake-icon">
+                  <RotateCcw size={14} />
+                </span>
+              )}
+            </button>
             <button className="shutter-btn" onClick={capturePhoto}>
               <div className="shutter-inner" />
             </button>

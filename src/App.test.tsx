@@ -1,21 +1,23 @@
-import { render, screen, waitFor } from '@testing-library/react'
-import { expect, test, describe } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+import { afterEach, expect, test, describe } from 'vitest'
 import App from './App'
 
+afterEach(() => {
+  cleanup()
+})
+
 describe('Deposit Defender App', () => {
-  test('renders Move-in Inspection header after loading', async () => {
+  test('renders setup screen after loading', async () => {
     render(<App />)
-    await waitFor(() => {
-      expect(screen.getByText(/Move-in Inspection/i)).toBeInTheDocument()
-    })
+    expect(await screen.findByText('House Record')).toBeInTheDocument()
+    expect(screen.getByText('공간 구성')).toBeInTheDocument()
   })
 
-  test('renders initial rooms from walkthrough.json after loading', async () => {
+  test('renders room configuration controls', async () => {
     render(<App />)
-    await waitFor(() => {
-      expect(screen.getByText(/Bedroom/i)).toBeInTheDocument()
-      expect(screen.getByText(/Kitchen/i)).toBeInTheDocument()
-      expect(screen.getByText(/Bathroom/i)).toBeInTheDocument()
-    })
+    expect(await screen.findByText('방')).toBeInTheDocument()
+    expect(screen.getByText('화장실')).toBeInTheDocument()
+    expect(screen.getByText('부엌')).toBeInTheDocument()
+    expect(screen.getByText('거실')).toBeInTheDocument()
   })
 })
