@@ -25,6 +25,7 @@ export interface CapturePlan {
   tasks: GuidedCaptureStep[];
   source: 'ai' | 'fallback';
   generatedAt: number;
+  elapsedMs?: number;
 }
 
 export interface CaptureReview {
@@ -33,6 +34,7 @@ export interface CaptureReview {
   hint?: string;
   source: 'ai' | 'fallback';
   reviewedAt: number;
+  elapsedMs?: number;
 }
 
 export interface BlockchainProof {

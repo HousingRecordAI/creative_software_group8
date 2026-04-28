@@ -41,6 +41,12 @@ function getCaptureSteps(room: Room, plan?: { tasks: GuidedCaptureStep[] }) {
   return [getOverviewStep(room), ...(plan?.tasks?.length ? plan.tasks : room.steps)];
 }
 
+function formatElapsedMs(elapsedMs?: number) {
+  if (!elapsedMs) return null;
+  if (elapsedMs < 1000) return `${elapsedMs}ms`;
+  return `${(elapsedMs / 1000).toFixed(1)}초`;
+}
+
 function analyzeCaptureFrame(video: HTMLVideoElement, canvas: HTMLCanvasElement): CaptureQuality {
   if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || video.videoWidth === 0) {
     return { status: 'checking', message: '카메라 준비 중' };
@@ -140,6 +146,8 @@ export default function App() {
   const currentReview = selectedRoomId && currentStep
     ? data.captureReviews?.[data.currentPhase]?.[selectedRoomId]?.[currentStep.id]
     : undefined;
+  const currentPlanElapsed = formatElapsedMs(currentPlan?.elapsedMs);
+  const currentReviewElapsed = formatElapsedMs(currentReview?.elapsedMs);
   const referencePhoto = useMemo(() => {
     if (data.currentPhase !== 'move-out' || !selectedRoomId || !currentStep) return null;
     return data.photos['move-in']?.[selectedRoomId]?.[currentStep.id]?.[0] ?? null;
@@ -624,7 +632,8 @@ export default function App() {
               <p>{currentStep.guide}</p>
               {currentPlan?.summary && currentStep.id !== 'overview' && (
                 <div className={`guide-plan-badge ${currentPlan.source}`}>
-                  {currentPlan.source === 'ai' ? 'AI 촬영 목록' : '기본 촬영 목록'} · {currentPlan.summary}
+                  {currentPlan.source === 'ai' ? 'AI 촬영 목록' : '기본 촬영 목록'}
+                  {currentPlanElapsed ? ` · ${currentPlanElapsed}` : ''} · {currentPlan.summary}
                 </div>
               )}
               {isGeneratingGuide && (
@@ -641,7 +650,10 @@ export default function App() {
               )}
               {currentReview && !isReviewingCapture && (
                 <div className={`capture-review ${currentReview.status}`}>
-                  <span>{currentReview.message}</span>
+                  <span>
+                    {currentReview.message}
+                    {currentReviewElapsed ? ` (${currentReview.source === 'ai' ? 'AI' : '기본'} ${currentReviewElapsed})` : ''}
+                  </span>
                   {currentReview.hint && <small>{currentReview.hint}</small>}
                 </div>
               )}
@@ -667,7 +679,11 @@ export default function App() {
             <button className="shutter-btn" onClick={capturePhoto} disabled={isGeneratingGuide || isReviewingCapture}>
               <div className="shutter-inner" />
             </button>
-            <button className="wizard-next-btn" onClick={nextStep}>
+            <button
+              className="wizard-next-btn"
+              onClick={nextStep}
+              disabled={isGeneratingGuide || isReviewingCapture}
+            >
               {currentStepIndex === currentSteps.length - 1
                 ? <CheckCircle2 size={20} color="white" />
                 : <ChevronRight size={20} color="white" />

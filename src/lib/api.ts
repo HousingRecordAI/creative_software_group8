@@ -117,11 +117,12 @@ export function createFallbackCapturePlan(roomTypeId: string, roomName: string):
     summary: `${roomName}에서 분쟁 증거로 자주 필요한 위치를 기준으로 촬영 목록을 만들었습니다.`,
     tasks: getFallbackTasks(roomTypeId),
     source: 'fallback',
-    generatedAt: Date.now()
+    generatedAt: Date.now(),
+    elapsedMs: 0
   };
 }
 
-export function createFallbackCaptureReview(step: GuidedCaptureStep): CaptureReview {
+export function createFallbackCaptureReview(step: GuidedCaptureStep, elapsedMs = 0): CaptureReview {
   const hint = step.angle === 'low'
     ? '낮은 각도에서 하부와 연결부가 보이는지 확인하세요.'
     : step.angle === 'detail'
@@ -133,7 +134,8 @@ export function createFallbackCaptureReview(step: GuidedCaptureStep): CaptureRev
     message: '사진을 저장했습니다. AI 검수 대신 기본 체크 기준을 적용했습니다.',
     hint,
     source: 'fallback',
-    reviewedAt: Date.now()
+    reviewedAt: Date.now(),
+    elapsedMs
   };
 }
 
@@ -142,6 +144,7 @@ export async function generateCapturePlanFromOverview(params: {
   roomTypeId: string;
   imageDataUrl: string;
 }): Promise<CapturePlan> {
+  const startedAt = performance.now();
   const fallback = createFallbackCapturePlan(params.roomTypeId, params.roomName);
   const prompt = `너는 임차인 보증금 분쟁을 대비하는 사진 촬영 감독이다.
 사용자가 "${params.roomName}"의 전체 샷을 찍었다.
@@ -201,11 +204,12 @@ JSON 형식으로만 반환:
       summary: typeof parsed.summary === 'string' ? parsed.summary : fallback.summary,
       tasks,
       source: 'ai',
-      generatedAt: Date.now()
+      generatedAt: Date.now(),
+      elapsedMs: Math.round(performance.now() - startedAt)
     };
   } catch (error) {
     console.warn('AI capture plan generation failed:', error);
-    return fallback;
+    return { ...fallback, elapsedMs: Math.round(performance.now() - startedAt) };
   }
 }
 
@@ -214,6 +218,7 @@ export async function reviewGuidedCapture(params: {
   step: GuidedCaptureStep;
   imageDataUrl: string;
 }): Promise<CaptureReview> {
+  const startedAt = performance.now();
   const fallback = createFallbackCaptureReview(params.step);
   const prompt = `너는 임차인 보증금 분쟁용 증거 사진을 검수하는 촬영 감독이다.
 사용자는 "${params.roomName}"에서 "${params.step.label}"을 찍으려 한다.
@@ -257,11 +262,12 @@ JSON 형식으로만 반환:
           : '촬영 대상이 충분히 보이지 않습니다.',
       hint: typeof parsed.hint === 'string' ? parsed.hint : fallback.hint,
       source: 'ai',
-      reviewedAt: Date.now()
+      reviewedAt: Date.now(),
+      elapsedMs: Math.round(performance.now() - startedAt)
     };
   } catch (error) {
     console.warn('AI capture review failed:', error);
-    return fallback;
+    return createFallbackCaptureReview(params.step, Math.round(performance.now() - startedAt));
   }
 }
 
