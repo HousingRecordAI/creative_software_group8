@@ -19,6 +19,7 @@ out/
 .env
 .env.local
 .env.*.local
+.dev.vars
 
 # IDE 및 에디터 (Editor-specific)
 .vscode/
