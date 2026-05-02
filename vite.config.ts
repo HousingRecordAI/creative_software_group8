@@ -58,7 +58,13 @@ export default defineConfig(({ mode }) => {
         '/api/ollama': {
           target: ollamaHost,
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api\/ollama/, '')
+          rewrite: (path) => path.replace(/^\/api\/ollama/, ''),
+          configure: (proxy) => {
+            proxy.on('proxyReq', (proxyReq) => {
+              proxyReq.removeHeader('origin');
+              proxyReq.removeHeader('referer');
+            });
+          }
         }
       },
       watch: {
