@@ -95,6 +95,10 @@ function parseJsonObject(rawText: string): any {
   return JSON.parse(match?.[0] ?? rawText);
 }
 
+function getErrorMessage(error: unknown) {
+  return error instanceof Error && error.message ? error.message : '알 수 없는 오류가 발생했습니다.';
+}
+
 function dataUrlToBase64(dataUrl: string) {
   return dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
 }
@@ -145,7 +149,6 @@ export async function generateCapturePlanFromOverview(params: {
   imageDataUrl: string;
 }): Promise<CapturePlan> {
   const startedAt = performance.now();
-  const fallback = createFallbackCapturePlan(params.roomTypeId, params.roomName);
   const prompt = `너는 임차인 보증금 분쟁을 대비하는 사진 촬영 감독이다.
 사용자가 "${params.roomName}"의 전체 샷을 찍었다.
 사진에서 보이는 설비와 구조를 바탕으로, 나중에 분쟁 증거로 빠지면 안 되는 추가 촬영 목록을 만들어라.
@@ -184,9 +187,15 @@ JSON 형식으로만 반환:
       }),
     });
 
-    if (!response.ok) throw new Error(await readErrorBody(response));
+    if (!response.ok) {
+      throw new Error(`Ollama ${response.status}: ${await readErrorBody(response)}`);
+    }
 
     const data = await response.json();
+    if (typeof data.response !== 'string' || data.response.trim().length === 0) {
+      throw new Error('Ollama 응답에 촬영 목록 JSON이 없습니다.');
+    }
+
     const parsed = parseJsonObject(data.response || '{}');
     const tasks = Array.isArray(parsed.tasks)
       ? parsed.tasks.slice(0, 6).map((task: any, index: number): GuidedCaptureStep => ({
@@ -195,13 +204,17 @@ JSON 형식으로만 반환:
           guide: String(task.guide || '대상 부위가 선명하게 보이도록 찍어주세요.'),
           target: typeof task.target === 'string' ? task.target : undefined,
           angle: ['wide', 'detail', 'low'].includes(task.angle) ? task.angle : 'detail'
-        }))
+      }))
       : [];
 
-    if (tasks.length < 3) return fallback;
+    if (tasks.length < 3) {
+      throw new Error(`AI 촬영 목록이 ${tasks.length}개만 생성되었습니다. 최소 3개가 필요합니다.`);
+    }
 
     return {
-      summary: typeof parsed.summary === 'string' ? parsed.summary : fallback.summary,
+      summary: typeof parsed.summary === 'string' && parsed.summary.trim()
+        ? parsed.summary
+        : `${params.roomName} 전체 샷을 바탕으로 AI 촬영 목록을 만들었습니다.`,
       tasks,
       source: 'ai',
       generatedAt: Date.now(),
@@ -209,7 +222,7 @@ JSON 형식으로만 반환:
     };
   } catch (error) {
     console.warn('AI capture plan generation failed:', error);
-    return { ...fallback, elapsedMs: Math.round(performance.now() - startedAt) };
+    throw new Error(`AI 촬영 목록 생성 실패: ${getErrorMessage(error)}`);
   }
 }
 
@@ -219,7 +232,6 @@ export async function reviewGuidedCapture(params: {
   imageDataUrl: string;
 }): Promise<CaptureReview> {
   const startedAt = performance.now();
-  const fallback = createFallbackCaptureReview(params.step);
   const prompt = `너는 임차인 보증금 분쟁용 증거 사진을 검수하는 촬영 감독이다.
 사용자는 "${params.roomName}"에서 "${params.step.label}"을 찍으려 한다.
 촬영 지시: ${params.step.guide}
@@ -248,11 +260,21 @@ JSON 형식으로만 반환:
       }),
     });
 
-    if (!response.ok) throw new Error(await readErrorBody(response));
+    if (!response.ok) {
+      throw new Error(`Ollama ${response.status}: ${await readErrorBody(response)}`);
+    }
 
     const data = await response.json();
+    if (typeof data.response !== 'string' || data.response.trim().length === 0) {
+      throw new Error('Ollama 응답에 사진 검수 JSON이 없습니다.');
+    }
+
     const parsed = parseJsonObject(data.response || '{}');
-    const status = parsed.status === 'pass' ? 'pass' : 'retry';
+    if (parsed.status !== 'pass' && parsed.status !== 'retry') {
+      throw new Error('AI 검수 응답의 status가 pass 또는 retry가 아닙니다.');
+    }
+
+    const status = parsed.status;
     return {
       status,
       message: typeof parsed.message === 'string'
@@ -260,14 +282,14 @@ JSON 형식으로만 반환:
         : status === 'pass'
           ? '증거 사진으로 충분합니다.'
           : '촬영 대상이 충분히 보이지 않습니다.',
-      hint: typeof parsed.hint === 'string' ? parsed.hint : fallback.hint,
+      hint: typeof parsed.hint === 'string' ? parsed.hint : undefined,
       source: 'ai',
       reviewedAt: Date.now(),
       elapsedMs: Math.round(performance.now() - startedAt)
     };
   } catch (error) {
     console.warn('AI capture review failed:', error);
-    return createFallbackCaptureReview(params.step, Math.round(performance.now() - startedAt));
+    throw new Error(`AI 사진 검수 실패: ${getErrorMessage(error)}`);
   }
 }
 

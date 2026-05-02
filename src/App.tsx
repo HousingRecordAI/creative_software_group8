@@ -11,6 +11,7 @@ type AppState = 'setup' | 'hub' | 'wizard' | 'report' | 'processing' | 'analyze'
 
 type Room = { id: string; name: string; steps: GuidedCaptureStep[] };
 type CaptureQuality = { status: 'checking' | 'good' | 'warn'; message: string };
+type AsyncErrorMessage = { message: string; elapsedMs?: number };
 
 const ROOM_TYPES = [
   { id: 'bedroom',     label: '방',    emoji: '🛏', color: '#818CF8' },
@@ -37,14 +38,23 @@ function getOverviewStep(room: Room): GuidedCaptureStep {
   };
 }
 
-function getCaptureSteps(room: Room, plan?: { tasks: GuidedCaptureStep[] }) {
-  return [getOverviewStep(room), ...(plan?.tasks?.length ? plan.tasks : room.steps)];
+function hasAiCapturePlan(plan?: CapturePlan) {
+  return Boolean(plan && plan.source === 'ai' && plan.tasks.length > 0);
+}
+
+function getCaptureSteps(room: Room, plan?: CapturePlan) {
+  const guidedTasks = plan && hasAiCapturePlan(plan) ? plan.tasks : [];
+  return [getOverviewStep(room), ...guidedTasks];
 }
 
 function formatElapsedMs(elapsedMs?: number) {
   if (!elapsedMs) return null;
   if (elapsedMs < 1000) return `${elapsedMs}ms`;
   return `${(elapsedMs / 1000).toFixed(1)}초`;
+}
+
+function getDisplayErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function analyzeCaptureFrame(video: HTMLVideoElement, canvas: HTMLCanvasElement): CaptureQuality {
@@ -107,6 +117,8 @@ export default function App() {
   const [captureFlash, setCaptureFlash] = useState(false);
   const [isGeneratingGuide, setIsGeneratingGuide] = useState(false);
   const [isReviewingCapture, setIsReviewingCapture] = useState(false);
+  const [guideGenerationError, setGuideGenerationError] = useState<AsyncErrorMessage | null>(null);
+  const [captureReviewError, setCaptureReviewError] = useState<AsyncErrorMessage | null>(null);
   const [proofVerification, setProofVerification] = useState<VerificationResult | null>(null);
   const [setupCounts, setSetupCounts] = useState<Record<string, number>>(
     Object.fromEntries(ROOM_TYPES.map(t => [t.id, 0]))
@@ -153,6 +165,9 @@ export default function App() {
     return data.photos['move-in']?.[selectedRoomId]?.[currentStep.id]?.[0] ?? null;
   }, [data.currentPhase, data.photos, selectedRoomId, currentStep]);
   const frameGuideClass = currentStep ? getFrameGuideClass(currentStep) : 'wide';
+  const guideGenerationErrorElapsed = formatElapsedMs(guideGenerationError?.elapsedMs);
+  const captureReviewErrorElapsed = formatElapsedMs(captureReviewError?.elapsedMs);
+  const requiresAiGuide = currentStep?.id === 'overview' && !hasAiCapturePlan(currentPlan);
 
   useEffect(() => {
     loadAppData().then(loadedData => {
@@ -194,6 +209,11 @@ export default function App() {
   useEffect(() => {
     setShowReferenceOverlay(Boolean(referencePhoto));
   }, [referencePhoto, currentStepIndex]);
+
+  useEffect(() => {
+    setGuideGenerationError(null);
+    setCaptureReviewError(null);
+  }, [selectedRoomId, currentStepIndex, data.currentPhase]);
 
   useEffect(() => {
     if (currentStepIndex >= currentSteps.length && currentSteps.length > 0) {
@@ -291,8 +311,10 @@ export default function App() {
       };
     });
 
-    if (currentStep.id === 'overview' && currentRoom && (data.currentPhase === 'move-in' || !currentPlan)) {
+    if (currentStep.id === 'overview' && currentRoom && !hasAiCapturePlan(currentPlan)) {
+      const startedAt = performance.now();
       setIsGeneratingGuide(true);
+      setGuideGenerationError(null);
       try {
         const plan = await generateCapturePlanFromOverview({
           roomName: currentRoom.name,
@@ -301,6 +323,11 @@ export default function App() {
         });
         saveCapturePlan(data.currentPhase, selectedRoomId, plan);
         setCurrentStepIndex(1);
+      } catch (error) {
+        setGuideGenerationError({
+          message: getDisplayErrorMessage(error, 'AI 촬영 목록 생성에 실패했습니다.'),
+          elapsedMs: Math.round(performance.now() - startedAt)
+        });
       } finally {
         setIsGeneratingGuide(false);
       }
@@ -310,7 +337,9 @@ export default function App() {
     if (currentStep.id === 'overview') return;
 
     if (currentRoom) {
+      const startedAt = performance.now();
       setIsReviewingCapture(true);
+      setCaptureReviewError(null);
       try {
         const review = await reviewGuidedCapture({
           roomName: currentRoom.name,
@@ -318,6 +347,11 @@ export default function App() {
           imageDataUrl: newPhoto
         });
         saveCaptureReview(data.currentPhase, selectedRoomId, currentStep.id, review);
+      } catch (error) {
+        setCaptureReviewError({
+          message: getDisplayErrorMessage(error, 'AI 사진 검수에 실패했습니다.'),
+          elapsedMs: Math.round(performance.now() - startedAt)
+        });
       } finally {
         setIsReviewingCapture(false);
       }
@@ -422,6 +456,7 @@ export default function App() {
 
   const totalCompleted = rooms.filter(room => {
     const plan = data.capturePlans?.[data.currentPhase]?.[room.id] || data.capturePlans?.['move-in']?.[room.id];
+    if (!hasAiCapturePlan(plan)) return false;
     const steps = getCaptureSteps(room, plan);
     return steps.length > 0 && steps.every(s => getStepPhotos(data.currentPhase, room.id, s.id).length > 0);
   }).length;
@@ -511,9 +546,10 @@ export default function App() {
               {rooms.map(room => {
                 const firstPhoto = getFirstPhotoInRoom(data.currentPhase, room.id);
                 const plan = data.capturePlans?.[data.currentPhase]?.[room.id] || data.capturePlans?.['move-in']?.[room.id];
+                const hasPlan = hasAiCapturePlan(plan);
                 const roomSteps = getCaptureSteps(room, plan);
                 const completedSteps = roomSteps.filter(s => getStepPhotos(data.currentPhase, room.id, s.id).length > 0).length;
-                const isFullyDone = completedSteps === roomSteps.length && roomSteps.length > 0;
+                const isFullyDone = hasPlan && completedSteps === roomSteps.length && roomSteps.length > 0;
                 const roomTypeId = room.id.replace(/-\d+$/, '');
                 const roomType = ROOM_TYPES.find(t => t.id === roomTypeId);
                 const roomColor = roomType?.color ?? '#818CF8';
@@ -537,7 +573,11 @@ export default function App() {
                     <div className="room-card-body">
                       <h3>{room.name}</h3>
                       <div className={`room-step-pill ${isFullyDone ? 'done' : ''}`}>
-                        {isFullyDone ? '✓ 완료' : `${completedSteps}/${roomSteps.length} 단계`}
+                        {isFullyDone
+                          ? '✓ 완료'
+                          : !hasPlan && completedSteps > 0
+                            ? 'AI 목록 필요'
+                            : `${completedSteps}/${roomSteps.length} 단계`}
                       </div>
                     </div>
                   </button>
@@ -642,10 +682,28 @@ export default function App() {
                   <span>AI가 전체 샷을 보고 추가 촬영 목록을 만드는 중입니다.</span>
                 </div>
               )}
+              {guideGenerationError && currentStep.id === 'overview' && !isGeneratingGuide && (
+                <div className="capture-review error">
+                  <span>
+                    {guideGenerationError.message}
+                    {guideGenerationErrorElapsed ? ` (${guideGenerationErrorElapsed})` : ''}
+                  </span>
+                  <small>기본 목록으로 넘어가지 않았습니다. Ollama가 켜져 있는지 확인한 뒤 전체 샷을 다시 촬영해 주세요.</small>
+                </div>
+              )}
               {isReviewingCapture && (
                 <div className="capture-review pending">
                   <div className="mini-spinner" />
                   <span>사진이 증거로 충분한지 확인하는 중입니다.</span>
+                </div>
+              )}
+              {captureReviewError && currentStep.id !== 'overview' && !isReviewingCapture && (
+                <div className="capture-review error">
+                  <span>
+                    {captureReviewError.message}
+                    {captureReviewErrorElapsed ? ` (${captureReviewErrorElapsed})` : ''}
+                  </span>
+                  <small>AI 검수 결과를 저장하지 않았습니다. 필요하면 같은 위치를 다시 촬영해 주세요.</small>
                 </div>
               )}
               {currentReview && !isReviewingCapture && (
@@ -682,7 +740,7 @@ export default function App() {
             <button
               className="wizard-next-btn"
               onClick={nextStep}
-              disabled={isGeneratingGuide || isReviewingCapture}
+              disabled={isGeneratingGuide || isReviewingCapture || requiresAiGuide}
             >
               {currentStepIndex === currentSteps.length - 1
                 ? <CheckCircle2 size={20} color="white" />
