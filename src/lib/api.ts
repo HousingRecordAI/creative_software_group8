@@ -49,6 +49,31 @@ async function readErrorBody(response: Response): Promise<string> {
   }
 }
 
+function previewText(value: string, maxLength = 260) {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;
+}
+
+async function readOllamaGenerateText(response: Response, label: string): Promise<string> {
+  const body = await response.text();
+  if (!body.trim()) {
+    throw new Error(`${label} 응답 본문이 비어 있습니다.`);
+  }
+
+  let data: any;
+  try {
+    data = JSON.parse(body);
+  } catch (error) {
+    throw new Error(`${label} HTTP 응답 JSON 파싱 실패: ${getErrorMessage(error)} · body="${previewText(body)}"`);
+  }
+
+  if (typeof data.response !== 'string' || data.response.trim().length === 0) {
+    throw new Error(`${label} 응답에 모델 출력 JSON이 없습니다. body="${previewText(body)}"`);
+  }
+
+  return data.response;
+}
+
 function parseAnalysisData(rawText: string): AnalysisData {
   const match = rawText.match(/\{[\s\S]*\}/);
   try {
@@ -62,9 +87,14 @@ function parseAnalysisData(rawText: string): AnalysisData {
   }
 }
 
-function parseJsonObject(rawText: string): any {
+function parseJsonObject(rawText: string, label = '모델 출력'): any {
   const match = rawText.match(/\{[\s\S]*\}/);
-  return JSON.parse(match?.[0] ?? rawText);
+  const jsonText = match?.[0] ?? rawText;
+  try {
+    return JSON.parse(jsonText);
+  } catch (error) {
+    throw new Error(`${label} JSON 파싱 실패: ${getErrorMessage(error)} · output="${previewText(rawText)}"`);
+  }
 }
 
 function getErrorMessage(error: unknown) {
@@ -127,7 +157,7 @@ JSON 형식으로만 반환:
         images: [dataUrlToBase64(params.imageDataUrl)],
         stream: false,
         format: 'json',
-        options: { temperature: 0.2 }
+        options: { temperature: 0.2, num_predict: 1600 }
       }),
     });
 
@@ -135,12 +165,8 @@ JSON 형식으로만 반환:
       throw new Error(`Ollama ${response.status}: ${await readErrorBody(response)}`);
     }
 
-    const data = await response.json();
-    if (typeof data.response !== 'string' || data.response.trim().length === 0) {
-      throw new Error('Ollama 응답에 촬영 목록 JSON이 없습니다.');
-    }
-
-    const parsed = parseJsonObject(data.response || '{}');
+    const modelOutput = await readOllamaGenerateText(response, '촬영 계획');
+    const parsed = parseJsonObject(modelOutput, '촬영 계획');
     const tasks = Array.isArray(parsed.tasks)
       ? parsed.tasks.slice(0, 8).map((task: any, index: number): GuidedCaptureStep => {
           const minPhotos = Number(task.minPhotos);
@@ -216,7 +242,7 @@ JSON 형식으로만 반환:
         images: [dataUrlToBase64(params.imageDataUrl)],
         stream: false,
         format: 'json',
-        options: { temperature: 0.1 }
+        options: { temperature: 0.1, num_predict: 500 }
       }),
     });
 
@@ -224,12 +250,8 @@ JSON 형식으로만 반환:
       throw new Error(`Ollama ${response.status}: ${await readErrorBody(response)}`);
     }
 
-    const data = await response.json();
-    if (typeof data.response !== 'string' || data.response.trim().length === 0) {
-      throw new Error('Ollama 응답에 사진 검수 JSON이 없습니다.');
-    }
-
-    const parsed = parseJsonObject(data.response || '{}');
+    const modelOutput = await readOllamaGenerateText(response, '사진 검수');
+    const parsed = parseJsonObject(modelOutput, '사진 검수');
     if (parsed.status !== 'pass' && parsed.status !== 'retry') {
       throw new Error('AI 검수 응답의 status가 pass 또는 retry가 아닙니다.');
     }
