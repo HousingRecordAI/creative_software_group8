@@ -12,6 +12,13 @@ type AppState = 'setup' | 'hub' | 'wizard' | 'report' | 'processing' | 'analyze'
 type Room = { id: string; name: string; steps: GuidedCaptureStep[] };
 type CaptureQuality = { status: 'checking' | 'good' | 'warn'; message: string };
 type AsyncErrorMessage = { message: string; elapsedMs?: number };
+type CheckpointCoverage = {
+  required: number;
+  captured: number;
+  passed: number;
+  status: 'waiting' | 'needs-ai' | 'needs-photo' | 'retry' | 'complete';
+  label: string;
+};
 
 const ROOM_TYPES = [
   { id: 'bedroom',     label: '방',    emoji: '🛏', color: '#818CF8' },
@@ -45,6 +52,58 @@ function hasAiCapturePlan(plan?: CapturePlan) {
 function getCaptureSteps(room: Room, plan?: CapturePlan) {
   const guidedTasks = plan && hasAiCapturePlan(plan) ? plan.tasks : [];
   return [getOverviewStep(room), ...guidedTasks];
+}
+
+function getRequiredPhotoCount(step: GuidedCaptureStep) {
+  if (step.id === 'overview') return 1;
+  const minPhotos = Number(step.minPhotos);
+  return Number.isFinite(minPhotos) ? Math.min(3, Math.max(1, Math.round(minPhotos))) : 1;
+}
+
+function normalizeReviewList(value?: CaptureReview | CaptureReview[]) {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function getStoredStepReviews(
+  data: PersistentData,
+  phase: InspectionPhase,
+  roomId: string,
+  stepId: string
+) {
+  return normalizeReviewList(data.captureReviews?.[phase]?.[roomId]?.[stepId]);
+}
+
+function getLatestReview(reviews: CaptureReview[]) {
+  return reviews.length > 0 ? reviews[reviews.length - 1] : undefined;
+}
+
+function getCheckpointCoverage(
+  step: GuidedCaptureStep,
+  photos: string[],
+  reviews: CaptureReview[],
+  hasPlan: boolean
+): CheckpointCoverage {
+  const required = getRequiredPhotoCount(step);
+  const captured = photos.length;
+  const passed = step.id === 'overview'
+    ? (captured > 0 && hasPlan ? 1 : 0)
+    : reviews.filter(review => review.status === 'pass').length;
+  const latestReview = getLatestReview(reviews);
+
+  if (step.id === 'overview' && captured > 0 && !hasPlan) {
+    return { required, captured, passed, status: 'needs-ai', label: 'AI 계획 필요' };
+  }
+  if (passed >= required) {
+    return { required, captured, passed, status: 'complete', label: `통과 ${passed}/${required}` };
+  }
+  if (captured === 0) {
+    return { required, captured, passed, status: 'needs-photo', label: `필요 ${required}장` };
+  }
+  if (latestReview?.status === 'retry') {
+    return { required, captured, passed, status: 'retry', label: `재촬영 ${passed}/${required}` };
+  }
+  return { required, captured, passed, status: 'waiting', label: `검수 ${passed}/${required}` };
 }
 
 function formatElapsedMs(elapsedMs?: number) {
@@ -155,11 +214,18 @@ export default function App() {
     [currentRoom, currentPlan]
   );
   const currentStep = useMemo(() => currentSteps[currentStepIndex], [currentSteps, currentStepIndex]);
-  const currentReview = selectedRoomId && currentStep
-    ? data.captureReviews?.[data.currentPhase]?.[selectedRoomId]?.[currentStep.id]
-    : undefined;
+  const currentReviews = selectedRoomId && currentStep
+    ? getStoredStepReviews(data, data.currentPhase, selectedRoomId, currentStep.id)
+    : [];
+  const currentReview = getLatestReview(currentReviews);
   const currentPlanElapsed = formatElapsedMs(currentPlan?.elapsedMs);
   const currentReviewElapsed = formatElapsedMs(currentReview?.elapsedMs);
+  const currentStepPhotos = selectedRoomId && currentStep
+    ? data.photos[data.currentPhase]?.[selectedRoomId]?.[currentStep.id] || []
+    : [];
+  const currentCoverage = currentStep
+    ? getCheckpointCoverage(currentStep, currentStepPhotos, currentReviews, hasAiCapturePlan(currentPlan))
+    : null;
   const referencePhoto = useMemo(() => {
     if (data.currentPhase !== 'move-out' || !selectedRoomId || !currentStep) return null;
     return data.photos['move-in']?.[selectedRoomId]?.[currentStep.id]?.[0] ?? null;
@@ -168,6 +234,7 @@ export default function App() {
   const guideGenerationErrorElapsed = formatElapsedMs(guideGenerationError?.elapsedMs);
   const captureReviewErrorElapsed = formatElapsedMs(captureReviewError?.elapsedMs);
   const requiresAiGuide = currentStep?.id === 'overview' && !hasAiCapturePlan(currentPlan);
+  const canAdvanceFromCurrentStep = Boolean(currentCoverage?.status === 'complete');
 
   useEffect(() => {
     loadAppData().then(loadedData => {
@@ -278,7 +345,10 @@ export default function App() {
           ...(prev.captureReviews?.[phase] || {}),
           [roomId]: {
             ...(prev.captureReviews?.[phase]?.[roomId] || {}),
-            [stepId]: review
+            [stepId]: [
+              ...normalizeReviewList(prev.captureReviews?.[phase]?.[roomId]?.[stepId]),
+              review
+            ]
           }
         }
       }
@@ -295,6 +365,7 @@ export default function App() {
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const newPhoto = canvas.toDataURL('image/jpeg', 0.8);
+    const nextPhotoIndex = currentStepPhotos.length;
     setCaptureFlash(true);
     window.setTimeout(() => setCaptureFlash(false), 180);
     setData(prev => {
@@ -346,7 +417,10 @@ export default function App() {
           step: currentStep,
           imageDataUrl: newPhoto
         });
-        saveCaptureReview(data.currentPhase, selectedRoomId, currentStep.id, review);
+        saveCaptureReview(data.currentPhase, selectedRoomId, currentStep.id, {
+          ...review,
+          photoIndex: nextPhotoIndex
+        });
       } catch (error) {
         setCaptureReviewError({
           message: getDisplayErrorMessage(error, 'AI 사진 검수에 실패했습니다.'),
@@ -360,14 +434,28 @@ export default function App() {
 
   const removeLastPhoto = () => {
     if (!selectedRoomId || !currentStep) return;
+    setCaptureReviewError(null);
+    setGuideGenerationError(null);
     setData(prev => {
       const phase = prev.currentPhase;
       const phasePhotos = prev.photos[phase] || {};
       const roomPhotos = phasePhotos[selectedRoomId] || {};
       const stepPhotos = roomPhotos[currentStep.id] || [];
       if (stepPhotos.length === 0) return prev;
+      const phaseReviews = prev.captureReviews?.[phase] || {};
+      const roomReviews = phaseReviews[selectedRoomId] || {};
+      const nextReviews = normalizeReviewList(roomReviews[currentStep.id]).slice(0, -1);
+      const nextPhasePlans = { ...(prev.capturePlans?.[phase] || {}) };
+      if (currentStep.id === 'overview') delete nextPhasePlans[selectedRoomId];
+
       return {
         ...prev,
+        capturePlans: currentStep.id === 'overview'
+          ? {
+              ...prev.capturePlans,
+              [phase]: nextPhasePlans
+            }
+          : prev.capturePlans,
         photos: {
           ...prev.photos,
           [phase]: {
@@ -381,15 +469,10 @@ export default function App() {
         captureReviews: {
           ...prev.captureReviews,
           [phase]: {
-            ...(prev.captureReviews?.[phase] || {}),
+            ...phaseReviews,
             [selectedRoomId]: {
-              ...(prev.captureReviews?.[phase]?.[selectedRoomId] || {}),
-              [currentStep.id]: {
-                status: 'saved',
-                message: '마지막 사진을 제거했습니다. 다시 촬영해 주세요.',
-                source: 'fallback',
-                reviewedAt: Date.now()
-              }
+              ...roomReviews,
+              [currentStep.id]: nextReviews
             }
           }
         }
@@ -451,15 +534,20 @@ export default function App() {
   );
 
   const currentPhasePhotos = data.photos[data.currentPhase];
-  const currentPhotos = selectedRoomId && currentStep ? getStepPhotos(data.currentPhase, selectedRoomId, currentStep.id) : [];
+  const currentPhotos = currentStepPhotos;
   const lastPhoto = currentPhotos[currentPhotos.length - 1];
 
   const totalCompleted = rooms.filter(room => {
     const plan = data.capturePlans?.[data.currentPhase]?.[room.id] || data.capturePlans?.['move-in']?.[room.id];
     if (!hasAiCapturePlan(plan)) return false;
     const steps = getCaptureSteps(room, plan);
-    return steps.length > 0 && steps.every(s => getStepPhotos(data.currentPhase, room.id, s.id).length > 0);
+    return steps.length > 0 && steps.every(step => {
+      const photos = getStepPhotos(data.currentPhase, room.id, step.id);
+      const reviews = getStoredStepReviews(data, data.currentPhase, room.id, step.id);
+      return getCheckpointCoverage(step, photos, reviews, hasAiCapturePlan(plan)).status === 'complete';
+    });
   }).length;
+  const allRoomsComplete = rooms.length > 0 && totalCompleted === rooms.length;
 
   return (
     <div className="app">
@@ -548,7 +636,14 @@ export default function App() {
                 const plan = data.capturePlans?.[data.currentPhase]?.[room.id] || data.capturePlans?.['move-in']?.[room.id];
                 const hasPlan = hasAiCapturePlan(plan);
                 const roomSteps = getCaptureSteps(room, plan);
-                const completedSteps = roomSteps.filter(s => getStepPhotos(data.currentPhase, room.id, s.id).length > 0).length;
+                const completedSteps = roomSteps.filter(step => {
+                  const photos = getStepPhotos(data.currentPhase, room.id, step.id);
+                  const reviews = getStoredStepReviews(data, data.currentPhase, room.id, step.id);
+                  return getCheckpointCoverage(step, photos, reviews, hasPlan).status === 'complete';
+                }).length;
+                const capturedCount = roomSteps.reduce((sum, step) => (
+                  sum + getStepPhotos(data.currentPhase, room.id, step.id).length
+                ), 0);
                 const isFullyDone = hasPlan && completedSteps === roomSteps.length && roomSteps.length > 0;
                 const roomTypeId = room.id.replace(/-\d+$/, '');
                 const roomType = ROOM_TYPES.find(t => t.id === roomTypeId);
@@ -575,9 +670,9 @@ export default function App() {
                       <div className={`room-step-pill ${isFullyDone ? 'done' : ''}`}>
                         {isFullyDone
                           ? '✓ 완료'
-                          : !hasPlan && completedSteps > 0
+                          : !hasPlan && capturedCount > 0
                             ? 'AI 목록 필요'
-                            : `${completedSteps}/${roomSteps.length} 단계`}
+                            : `${completedSteps}/${roomSteps.length} 체크`}
                       </div>
                     </div>
                   </button>
@@ -589,7 +684,7 @@ export default function App() {
               <button
                 className="cta-btn"
                 onClick={handleFinalizeReport}
-                disabled={Object.keys(currentPhasePhotos).length === 0}
+                disabled={Object.keys(currentPhasePhotos).length === 0 || !allRoomsComplete}
               >
                 {data.currentPhase === 'move-in' ? '증거 root 로컬 체인에 고정하기' : '퇴실 비교 분석하기'}
               </button>
@@ -670,6 +765,57 @@ export default function App() {
                 <span>{currentStepIndex + 1}/{currentSteps.length}</span>
               </div>
               <p>{currentStep.guide}</p>
+              {hasAiCapturePlan(currentPlan) && currentStep.id !== 'overview' && (
+                <div className="checkpoint-rail" aria-label="AI 촬영 체크포인트">
+                  {currentSteps.slice(1).map((step, index) => {
+                    const stepIndex = index + 1;
+                    const photos = selectedRoomId ? getStepPhotos(data.currentPhase, selectedRoomId, step.id) : [];
+                    const reviews = selectedRoomId ? getStoredStepReviews(data, data.currentPhase, selectedRoomId, step.id) : [];
+                    const coverage = getCheckpointCoverage(step, photos, reviews, true);
+
+                    return (
+                      <button
+                        key={step.id}
+                        className={`checkpoint-pill ${coverage.status} ${currentStepIndex === stepIndex ? 'active' : ''}`}
+                        onClick={() => setCurrentStepIndex(stepIndex)}
+                      >
+                        <span>{step.label}</span>
+                        <small>{coverage.label}</small>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {currentCoverage && (
+                <div className={`checkpoint-status ${currentCoverage.status}`}>
+                  <span>{currentCoverage.label}</span>
+                  <small>촬영 {currentCoverage.captured}장 · 필요 통과 {currentCoverage.required}장</small>
+                </div>
+              )}
+              {currentStep.coverageCriteria && currentStep.coverageCriteria.length > 0 && (
+                <div className="coverage-criteria">
+                  {currentStep.coverageCriteria.map(item => (
+                    <span key={item}>{item}</span>
+                  ))}
+                </div>
+              )}
+              {currentPhotos.length > 0 && (
+                <div className="capture-photo-strip" aria-label="현재 체크포인트 촬영 사진">
+                  {currentPhotos.map((photo, index) => {
+                    const review = currentReviews.find(item => item.photoIndex === index) || currentReviews[index];
+                    const reviewStatus = currentStep.id === 'overview'
+                      ? hasAiCapturePlan(currentPlan) ? 'pass' : 'saved'
+                      : review?.status || 'saved';
+
+                    return (
+                      <div key={`${currentStep.id}-${index}`} className={`capture-photo-chip ${reviewStatus}`}>
+                        <img src={photo} alt="" />
+                        <span>{index + 1}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               {currentPlan?.summary && currentStep.id !== 'overview' && (
                 <div className={`guide-plan-badge ${currentPlan.source}`}>
                   {currentPlan.source === 'ai' ? 'AI 촬영 목록' : '기본 촬영 목록'}
@@ -740,7 +886,7 @@ export default function App() {
             <button
               className="wizard-next-btn"
               onClick={nextStep}
-              disabled={isGeneratingGuide || isReviewingCapture || requiresAiGuide}
+              disabled={isGeneratingGuide || isReviewingCapture || requiresAiGuide || !canAdvanceFromCurrentStep}
             >
               {currentStepIndex === currentSteps.length - 1
                 ? <CheckCircle2 size={20} color="white" />

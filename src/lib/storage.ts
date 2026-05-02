@@ -18,6 +18,8 @@ export interface GuidedCaptureStep {
   guide: string;
   target?: string;
   angle?: 'wide' | 'detail' | 'low';
+  minPhotos?: number;
+  coverageCriteria?: string[];
 }
 
 export interface CapturePlan {
@@ -35,6 +37,7 @@ export interface CaptureReview {
   source: 'ai' | 'fallback';
   reviewedAt: number;
   elapsedMs?: number;
+  photoIndex?: number;
 }
 
 export interface BlockchainProof {
@@ -58,7 +61,7 @@ export type PersistentData = {
   currentPhase: InspectionPhase;
   roomConfig?: Record<string, number>;
   capturePlans?: Partial<Record<InspectionPhase, Record<string, CapturePlan>>>;
-  captureReviews?: Partial<Record<InspectionPhase, Record<string, Record<string, CaptureReview>>>>;
+  captureReviews?: Partial<Record<InspectionPhase, Record<string, Record<string, CaptureReview | CaptureReview[]>>>>;
   blockchainProof?: BlockchainProof;
 };
 

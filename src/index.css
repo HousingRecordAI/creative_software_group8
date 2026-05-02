@@ -610,6 +610,8 @@ button:disabled { opacity: 0.36; cursor: not-allowed; }
   padding: 1rem 1.25rem;
   border-radius: 1.25rem;
   z-index: 10;
+  max-height: calc(100% - 12rem);
+  overflow-y: auto;
 }
 .wizard-guide-meta {
   display: flex;
@@ -634,6 +636,140 @@ button:disabled { opacity: 0.36; cursor: not-allowed; }
   color: rgba(255,255,255,0.9);
   line-height: 1.5;
 }
+.checkpoint-rail {
+  display: flex;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding: 0.75rem 0 0.1rem;
+  scrollbar-width: none;
+}
+.checkpoint-rail::-webkit-scrollbar { display: none; }
+.checkpoint-pill {
+  flex: 0 0 8.5rem;
+  min-height: 3rem;
+  border-radius: 0.8rem;
+  padding: 0.48rem 0.6rem;
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.16);
+  color: rgba(255,255,255,0.78);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.12rem;
+}
+.checkpoint-pill span {
+  font-size: 0.68rem;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.checkpoint-pill small {
+  font-size: 0.62rem;
+  font-weight: 800;
+  color: rgba(255,255,255,0.56);
+}
+.checkpoint-pill.active {
+  background: rgba(255,255,255,0.22);
+  border-color: rgba(255,255,255,0.36);
+  color: white;
+}
+.checkpoint-pill.complete {
+  background: rgba(34,198,142,0.22);
+  border-color: rgba(110,231,183,0.34);
+}
+.checkpoint-pill.retry {
+  background: rgba(255,212,79,0.2);
+  border-color: rgba(255,212,79,0.36);
+}
+.checkpoint-status {
+  margin-top: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.52rem 0.65rem;
+  border-radius: 0.75rem;
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.16);
+  color: white;
+}
+.checkpoint-status span {
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+.checkpoint-status small {
+  color: rgba(255,255,255,0.68);
+  font-size: 0.68rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.checkpoint-status.complete {
+  background: rgba(34,198,142,0.22);
+  border-color: rgba(110,231,183,0.34);
+}
+.checkpoint-status.retry,
+.checkpoint-status.needs-ai {
+  background: rgba(255,212,79,0.2);
+  border-color: rgba(255,212,79,0.36);
+}
+.coverage-criteria {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+}
+.coverage-criteria span {
+  padding: 0.24rem 0.48rem;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.74);
+  font-size: 0.64rem;
+  font-weight: 800;
+}
+.capture-photo-strip {
+  display: flex;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding-top: 0.7rem;
+  scrollbar-width: none;
+}
+.capture-photo-strip::-webkit-scrollbar { display: none; }
+.capture-photo-chip {
+  position: relative;
+  flex: 0 0 3.35rem;
+  width: 3.35rem;
+  height: 3.35rem;
+  border-radius: 0.72rem;
+  overflow: hidden;
+  border: 2px solid rgba(255,255,255,0.28);
+  background: rgba(255,255,255,0.12);
+}
+.capture-photo-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.capture-photo-chip span {
+  position: absolute;
+  right: 0.18rem;
+  bottom: 0.18rem;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(26,30,45,0.76);
+  color: white;
+  font-size: 0.62rem;
+  font-weight: 900;
+}
+.capture-photo-chip.pass { border-color: rgba(110,231,183,0.9); }
+.capture-photo-chip.retry { border-color: rgba(255,212,79,0.95); }
+.capture-photo-chip.saved { border-color: rgba(203,213,225,0.65); }
 .guide-plan-badge {
   margin-top: 0.75rem;
   padding: 0.55rem 0.7rem;
