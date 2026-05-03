@@ -4,6 +4,9 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
+const DEMO_CAPTURE_TASK_LIMIT = 2;
+const DEMO_CAPTURE_MIN_TASKS = 1;
+const DEMO_COVERAGE_CRITERIA_LIMIT = 2;
 
 type AiTask = 'capture_plan' | 'capture_review' | 'defect_analysis' | 'move_out_comparison';
 
@@ -28,7 +31,7 @@ const TOOL_DEFINITIONS = [
         tasks: {
           type: 'array',
           minItems: 0,
-          maxItems: 8,
+          maxItems: DEMO_CAPTURE_TASK_LIMIT,
           items: captureTaskSchema(),
         },
       },
@@ -145,8 +148,8 @@ function normalizeToolInput(task: AiTask, input: any) {
   }
 
   if (task === 'capture_plan') {
-    const tasks = Array.isArray(input.tasks) ? input.tasks.map(normalizeCaptureTask).filter(Boolean).slice(0, 8) : [];
-    if (tasks.length < 3) {
+    const tasks = Array.isArray(input.tasks) ? input.tasks.map(normalizeCaptureTask).filter(Boolean).slice(0, DEMO_CAPTURE_TASK_LIMIT) : [];
+    if (tasks.length < DEMO_CAPTURE_MIN_TASKS) {
       return {
         ok: false,
         error: {
@@ -204,9 +207,9 @@ function normalizeCaptureTask(task: any) {
     guide: stringOr(task.guide, '대상 부위가 선명하게 보이도록 찍어주세요.'),
     target: stringOr(task.target, '확인 대상'),
     angle: ['wide', 'detail', 'low'].includes(task.angle) ? task.angle : 'detail',
-    minPhotos: clampNumber(task.minPhotos, 1, 3, 1),
+    minPhotos: clampNumber(task.minPhotos, 1, 1, 1),
     coverageCriteria: Array.isArray(task.coverageCriteria)
-      ? task.coverageCriteria.filter((item: unknown) => typeof item === 'string' && item.trim()).slice(0, 4)
+      ? task.coverageCriteria.filter((item: unknown) => typeof item === 'string' && item.trim()).slice(0, DEMO_COVERAGE_CRITERIA_LIMIT)
       : [],
   };
 }
@@ -284,11 +287,11 @@ function captureTaskSchema() {
       guide: { type: 'string' },
       target: { type: 'string' },
       angle: { type: 'string', enum: ['wide', 'detail', 'low'] },
-      minPhotos: { type: 'integer', minimum: 1, maximum: 3 },
+      minPhotos: { type: 'integer', minimum: 1, maximum: 1 },
       coverageCriteria: {
         type: 'array',
         minItems: 0,
-        maxItems: 4,
+        maxItems: DEMO_COVERAGE_CRITERIA_LIMIT,
         items: { type: 'string' },
       },
     },

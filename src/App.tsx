@@ -20,6 +20,9 @@ type CheckpointCoverage = {
   label: string;
 };
 
+const DEMO_EASY_PASS = true;
+const DEMO_CAPTURE_TASK_LIMIT = 2;
+
 const ROOM_TYPES = [
   { id: 'bedroom',     label: '방',    emoji: '🛏', color: '#818CF8' },
   { id: 'bathroom',    label: '화장실', emoji: '🚿', color: '#38BDF8' },
@@ -51,10 +54,18 @@ function hasAiCapturePlan(plan?: CapturePlan) {
 
 function getCaptureSteps(room: Room, plan?: CapturePlan) {
   const guidedTasks = plan && hasAiCapturePlan(plan) ? plan.tasks : [];
-  return [getOverviewStep(room), ...guidedTasks];
+  const demoTasks = DEMO_EASY_PASS
+    ? guidedTasks.slice(0, DEMO_CAPTURE_TASK_LIMIT).map(step => ({
+        ...step,
+        minPhotos: 1,
+        coverageCriteria: step.coverageCriteria?.slice(0, 2),
+      }))
+    : guidedTasks;
+  return [getOverviewStep(room), ...demoTasks];
 }
 
 function getRequiredPhotoCount(step: GuidedCaptureStep) {
+  if (DEMO_EASY_PASS) return 1;
   if (step.id === 'overview') return 1;
   const minPhotos = Number(step.minPhotos);
   return Number.isFinite(minPhotos) ? Math.min(3, Math.max(1, Math.round(minPhotos))) : 1;
