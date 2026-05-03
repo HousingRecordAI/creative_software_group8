@@ -1,16 +1,5 @@
 import type { CapturePlan, CaptureReview, GuidedCaptureStep } from './storage';
 
-export interface DefectItem {
-  type: string;
-  location: string;
-  severity: '경미' | '보통' | '심각';
-}
-
-export interface AnalysisData {
-  defects: DefectItem[];
-  summary: string;
-}
-
 const AI_GENERATE_URL = '/api/ai/generate';
 
 type AiImageInput = {
@@ -18,7 +7,7 @@ type AiImageInput = {
   mediaType: string;
 };
 
-type AiTask = 'capture_plan' | 'capture_review' | 'defect_analysis' | 'move_out_comparison';
+type AiTask = 'capture_plan' | 'capture_review';
 
 type AiGenerateParams = {
   label: string;
@@ -46,31 +35,6 @@ type CaptureReviewPayload = {
   message?: string;
   hint?: string;
 };
-
-type MoveOutComparisonPayload = {
-  damageLevel?: 'none' | 'low' | 'high';
-  notes?: string;
-};
-
-const DEFECT_ANALYSIS_PROMPT = `이 사진에서 다음 항목들을 한국어로 분석해줘:
-1. 발견된 하자 목록 (곰팡이, 스크래치, 균열, 누수, 변색 등)
-2. 각 하자의 위치와 심각도 (경미/보통/심각)
-3. 하자가 없으면 defects를 빈 배열로 반환
-
-실내 하자 분석 대상 사진이 아니거나 판단하기 어려우면 분석 결과를 만들지 말고 재촬영이 필요하다고 반환한다.
-반드시 제공된 구조화 도구의 입력 스키마에 맞춰 반환한다.`;
-
-async function readFileAsAiImage(file: File): Promise<AiImageInput> {
-  return new Promise<AiImageInput>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(dataUrlToAiImage(result, file.type || 'image/jpeg'));
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
 
 function previewText(value: string, maxLength = 260) {
   const compact = value.replace(/\s+/g, ' ').trim();
@@ -282,92 +246,4 @@ export async function reviewGuidedCapture(params: {
     console.warn('AI capture review failed:', error);
     throw new Error(`AI 사진 검수 실패: ${getErrorMessage(error)}`);
   }
-}
-
-export async function analyzeImage(file: File): Promise<AnalysisData> {
-  const image = await readFileAsAiImage(file);
-
-  const result = await generateWithClaude<AnalysisData>({
-    label: '하자 분석',
-    task: 'defect_analysis',
-    prompt: DEFECT_ANALYSIS_PROMPT,
-    images: [image],
-    maxTokens: 800,
-    temperature: 0.1
-  });
-
-  return {
-    defects: Array.isArray(result.defects) ? result.defects : [],
-    summary: typeof result.summary === 'string' ? result.summary : '분석 결과 요약이 없습니다.'
-  };
-}
-
-/**
- * Represents the discrepancy result for a specific room step.
- */
-export interface DiscrepancyResult {
-  roomId: string;
-  stepId: string;
-  damageLevel: 'none' | 'low' | 'high';
-  notes: string;
-}
-
-/**
- * Submits the move-out photos for real AI discrepancy detection using Claude.
- */
-export async function submitMoveOutReport(moveInPhotos: any, moveOutPhotos: any): Promise<DiscrepancyResult[]> {
-  console.log('AI Request: POST /api/ai/generate (Claude multimodal analysis)');
-  
-  const results: DiscrepancyResult[] = [];
-
-  for (const roomId in moveOutPhotos) {
-    for (const stepId in moveOutPhotos[roomId]) {
-      const outPhotoFull = moveOutPhotos[roomId][stepId][0]; // data:image/jpeg;base64,...
-      const inPhotoFull = moveInPhotos[roomId]?.[stepId]?.[0];
-
-      if (outPhotoFull && inPhotoFull) {
-        const prompt = `
-Compare these two photos of the same room area: "${roomId} - ${stepId}".
-Image 1: Move-in state (Baseline).
-Image 2: Move-out state (Current).
-
-Identify any new physical damage (scuffs, cracks, stains, holes) that wasn't there in Image 1. 
-Ignore lighting, camera angle, and lens distortion.
-
-Return the result through the provided structured tool schema.
-Damage level must be one of none, low, or high.
-The notes field must contain one concise sentence.
-        `;
-
-        try {
-          const comparison = await generateWithClaude<MoveOutComparisonPayload>({
-            label: '퇴실 비교',
-            task: 'move_out_comparison',
-            prompt,
-            images: [dataUrlToAiImage(inPhotoFull), dataUrlToAiImage(outPhotoFull)],
-            maxTokens: 800,
-            temperature: 0.1
-          });
-          console.log(`AI Output for ${roomId}/${stepId}:`, comparison);
-
-          results.push({
-            roomId,
-            stepId,
-            damageLevel: comparison.damageLevel || 'none',
-            notes: comparison.notes || '새로운 손상 여부를 판단할 수 없습니다.'
-          });
-
-        } catch (error) {
-          console.error(`AI analysis failed for ${roomId}/${stepId}:`, error);
-          results.push({
-            roomId, stepId,
-            damageLevel: 'none',
-            notes: 'AI analysis unavailable due to network or model error.'
-          });
-        }
-      }
-    }
-  }
-
-  return results;
 }

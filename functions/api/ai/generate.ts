@@ -17,14 +17,12 @@ type AiGenerateRequest = {
   temperature?: number;
 };
 
-type AiTask = 'capture_plan' | 'capture_review' | 'defect_analysis' | 'move_out_comparison';
+type AiTask = 'capture_plan' | 'capture_review';
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
 const TASK_TO_TOOL: Record<AiTask, string> = {
   capture_plan: 'create_capture_plan',
   capture_review: 'review_capture_photo',
-  defect_analysis: 'analyze_defects',
-  move_out_comparison: 'compare_move_out_damage',
 };
 
 const TOOL_DEFINITIONS = [
@@ -62,48 +60,6 @@ const TOOL_DEFINITIONS = [
         hint: { type: 'string' },
       },
       required: ['ok', 'status', 'message'],
-    },
-  },
-  {
-    name: 'analyze_defects',
-    description: 'Return structured visible defect analysis for an interior photo.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        ok: { type: 'boolean' },
-        error: errorSchema(),
-        defects: {
-          type: 'array',
-          items: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              type: { type: 'string' },
-              location: { type: 'string' },
-              severity: { type: 'string', enum: ['경미', '보통', '심각'] },
-            },
-            required: ['type', 'location', 'severity'],
-          },
-        },
-        summary: { type: 'string' },
-      },
-      required: ['ok', 'defects', 'summary'],
-    },
-  },
-  {
-    name: 'compare_move_out_damage',
-    description: 'Compare move-in and move-out photos and return structured damage level and notes.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        ok: { type: 'boolean' },
-        error: errorSchema(),
-        damageLevel: { type: 'string', enum: ['none', 'low', 'high'] },
-        notes: { type: 'string' },
-      },
-      required: ['ok', 'damageLevel', 'notes'],
     },
   },
 ];
@@ -251,21 +207,12 @@ function normalizeToolInput(task: AiTask, input: any) {
     };
   }
 
-  if (task === 'defect_analysis') {
-    return {
-      ok: true,
-      data: {
-        defects: Array.isArray(input.defects) ? input.defects.map(normalizeDefect).filter(Boolean) : [],
-        summary: stringOr(input.summary, '분석 결과 요약이 없습니다.'),
-      },
-    };
-  }
-
   return {
-    ok: true,
-    data: {
-      damageLevel: ['none', 'low', 'high'].includes(input.damageLevel) ? input.damageLevel : 'none',
-      notes: stringOr(input.notes, '새로운 손상 여부를 판단할 수 없습니다.'),
+    ok: false,
+    error: {
+      code: 'unsupported_task',
+      message: '지원하지 않는 AI 작업입니다.',
+      retryable: false,
     },
   };
 }
@@ -285,15 +232,6 @@ function normalizeCaptureTask(task: any) {
   };
 }
 
-function normalizeDefect(defect: any) {
-  if (!defect || typeof defect !== 'object') return null;
-  return {
-    type: stringOr(defect.type, '하자'),
-    location: stringOr(defect.location, '위치 미상'),
-    severity: ['경미', '보통', '심각'].includes(defect.severity) ? defect.severity : '경미',
-  };
-}
-
 function normalizeAiError(error: any, fallback: string) {
   return {
     code: typeof error?.code === 'string' && error.code.trim() ? error.code : 'ai_unable_to_complete',
@@ -310,10 +248,7 @@ function fallbackErrorForTask(task: AiTask) {
   if (task === 'capture_review') {
     return '사진이 촬영 지시를 평가하기에 충분하지 않습니다. 다시 촬영해 주세요.';
   }
-  if (task === 'defect_analysis') {
-    return '하자 분석 대상 사진으로 판단하기 어렵습니다.';
-  }
-  return '두 사진의 변경점을 비교하기 어렵습니다.';
+  return 'AI 작업을 처리하기 어렵습니다.';
 }
 
 function errorEnvelope(code: string, message: string, retryable: boolean) {
@@ -325,9 +260,7 @@ function errorEnvelope(code: string, message: string, retryable: boolean) {
 
 function isAiTask(value: unknown): value is AiTask {
   return value === 'capture_plan'
-    || value === 'capture_review'
-    || value === 'defect_analysis'
-    || value === 'move_out_comparison';
+    || value === 'capture_review';
 }
 
 function stringOr(value: unknown, fallback: string) {

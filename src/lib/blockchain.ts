@@ -165,11 +165,11 @@ export async function verifyInspectionEvidence(
   proof: BlockchainProof | undefined,
   photos: PhotoData
 ): Promise<VerificationResult> {
-  if (!proof?.rootHash || proof.phase !== 'move-in') {
+  if (!proof?.rootHash || !proof.phase) {
     return {
       isValid: false,
       title: '검증할 앵커 없음',
-      detail: '입주 증거 root가 아직 로컬 체인에 기록되지 않았습니다.'
+      detail: '증거 root가 아직 로컬 체인에 기록되지 않았습니다.'
     };
   }
 
@@ -197,7 +197,7 @@ export async function verifyInspectionEvidence(
     return {
       isValid: false,
       title: '사진 세트 불일치',
-      detail: '현재 입주 사진으로 다시 계산한 root가 블록체인에 고정된 root와 다릅니다.',
+      detail: '현재 사진으로 다시 계산한 root가 블록체인에 고정된 root와 다릅니다.',
       recomputedRootHash: evidence.rootHash
     };
   }

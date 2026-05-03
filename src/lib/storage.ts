@@ -63,6 +63,7 @@ export type PersistentData = {
   capturePlans?: Partial<Record<InspectionPhase, Record<string, CapturePlan>>>;
   captureReviews?: Partial<Record<InspectionPhase, Record<string, Record<string, CaptureReview | CaptureReview[]>>>>;
   blockchainProof?: BlockchainProof;
+  blockchainProofs?: Partial<Record<InspectionPhase, BlockchainProof>>;
 };
 
 const INITIAL_DATA: PersistentData = {

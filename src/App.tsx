@@ -1,13 +1,11 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Camera, FileText, Settings, ArrowLeft, CheckCircle2, ChevronRight, Image as ImageIcon, ShieldCheck, AlertTriangle, ScanLine, Home, Layers, RotateCcw } from 'lucide-react';
+import { Camera, FileText, Settings, ArrowLeft, CheckCircle2, ChevronRight, Image as ImageIcon, ShieldCheck, AlertTriangle, Home, Layers, RotateCcw } from 'lucide-react';
 import walkthroughData from './walkthrough.json';
 import { loadAppData, saveAppData, clearAppData, type CapturePlan, type CaptureReview, type GuidedCaptureStep, type PersistentData, type InspectionPhase } from './lib/storage';
 import { anchorInspectionEvidence, verifyInspectionEvidence, type VerificationResult } from './lib/blockchain';
-import { generateCapturePlanFromOverview, reviewGuidedCapture, submitMoveOutReport, analyzeImage, type DiscrepancyResult, type AnalysisData } from './lib/api';
-import ImageUpload from './components/ImageUpload';
-import AnalysisResult from './components/AnalysisResult';
+import { generateCapturePlanFromOverview, reviewGuidedCapture } from './lib/api';
 
-type AppState = 'setup' | 'hub' | 'wizard' | 'report' | 'processing' | 'analyze';
+type AppState = 'setup' | 'hub' | 'wizard' | 'report' | 'processing';
 
 type Room = { id: string; name: string; steps: GuidedCaptureStep[] };
 type CaptureQuality = { status: 'checking' | 'good' | 'warn'; message: string };
@@ -167,10 +165,6 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [discrepancies, setDiscrepancies] = useState<DiscrepancyResult[]>([]);
-  const [analyzeResult, setAnalyzeResult] = useState<AnalysisData | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [captureQuality, setCaptureQuality] = useState<CaptureQuality>({ status: 'checking', message: '카메라 준비 중' });
   const [showReferenceOverlay, setShowReferenceOverlay] = useState(true);
   const [captureFlash, setCaptureFlash] = useState(false);
@@ -295,7 +289,9 @@ export default function App() {
     }
 
     let cancelled = false;
-    verifyInspectionEvidence(data.blockchainProof, data.photos['move-in'])
+    const proof = data.blockchainProof;
+    const proofPhase = proof.phase || 'move-in';
+    verifyInspectionEvidence(proof, data.photos[proofPhase])
       .then(result => {
         if (!cancelled) setProofVerification(result);
       })
@@ -503,17 +499,21 @@ export default function App() {
     setIsSubmitting(true);
     setView('processing');
     try {
-      if (data.currentPhase === 'move-in') {
-        const response = await anchorInspectionEvidence({
-          phase: 'move-in',
-          photos: data.photos['move-in'],
-          metadata: { rooms: rooms.map(r => ({ id: r.id, name: r.name })) },
-        });
-        setData(prev => ({ ...prev, blockchainProof: response, currentPhase: 'move-out' }));
-      } else {
-        const results = await submitMoveOutReport(data.photos['move-in'], data.photos['move-out']);
-        setDiscrepancies(results);
-      }
+      const phase = data.currentPhase;
+      const response = await anchorInspectionEvidence({
+        phase,
+        photos: data.photos[phase],
+        metadata: { rooms: rooms.map(r => ({ id: r.id, name: r.name })) },
+      });
+      setData(prev => ({
+        ...prev,
+        blockchainProof: response,
+        blockchainProofs: {
+          ...prev.blockchainProofs,
+          [phase]: response,
+        },
+        currentPhase: phase === 'move-in' ? 'move-out' : 'move-out'
+      }));
       setView('report');
     } catch (error) {
       console.error(error);
@@ -686,7 +686,7 @@ export default function App() {
                 onClick={handleFinalizeReport}
                 disabled={Object.keys(currentPhasePhotos).length === 0 || !allRoomsComplete}
               >
-                {data.currentPhase === 'move-in' ? '증거 root 로컬 체인에 고정하기' : '퇴실 비교 분석하기'}
+                {data.currentPhase === 'move-in' ? '입주 증거 root 로컬 체인에 고정하기' : '퇴실 증거 root 로컬 체인에 고정하기'}
               </button>
             </div>
           </div>
@@ -897,55 +897,13 @@ export default function App() {
         </div>
       )}
 
-      {/* ── ANALYZE ── */}
-      {view === 'analyze' && (
-        <div className="analyze-view">
-          <div className="view-hero">
-            <div className="hero-app-name">
-              <ScanLine size={15} color="rgba(255,255,255,0.75)" />
-              <span>하자 분석</span>
-            </div>
-            <h1 className="hero-title">AI 하자 분석</h1>
-            <p className="hero-subtitle">이미지를 업로드하면 AI가 자동으로 분석합니다.</p>
-          </div>
-          <div className="view-shelf">
-            <div className="analyze-body" style={{ padding: '0' }}>
-              <ImageUpload
-                disabled={isAnalyzing}
-                onImageSelect={async (file) => {
-                  setAnalyzeResult(null);
-                  setAnalyzeError(null);
-                  setIsAnalyzing(true);
-                  try {
-                    const result = await analyzeImage(file);
-                    setAnalyzeResult(result);
-                  } catch (err) {
-                    setAnalyzeError(err instanceof Error ? err.message : '분석에 실패했습니다.');
-                  } finally {
-                    setIsAnalyzing(false);
-                  }
-                }}
-              />
-              {isAnalyzing && (
-                <div className="analyze-loading">
-                  <div className="spinner" />
-                  <p>AI 분석 중...</p>
-                </div>
-              )}
-              {analyzeError && <div className="analyze-error"><p>{analyzeError}</p></div>}
-              {analyzeResult && !isAnalyzing && <AnalysisResult result={analyzeResult} />}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ── PROCESSING ── */}
       {view === 'processing' && (
         <div className="processing-view">
           <div className="processing-orb">
             <div className="spinner" />
           </div>
-          <h2>{data.currentPhase === 'move-in' ? '로컬 체인에 증거 고정 중...' : 'AI 비교 분석 중...'}</h2>
+          <h2>로컬 체인에 증거 고정 중...</h2>
           <p>데이터를 안전하게 처리하고 있습니다.</p>
         </div>
       )}
@@ -958,7 +916,7 @@ export default function App() {
               <div className="report-success-icon">
                 <CheckCircle2 size={36} color="white" />
               </div>
-              <h1>{discrepancies.length > 0 ? '분석 완료' : '보고서 저장 완료'}</h1>
+              <h1>보고서 저장 완료</h1>
               <p>점검 데이터가 처리되었습니다.</p>
             </div>
           </div>
@@ -1003,24 +961,6 @@ export default function App() {
               </div>
             )}
 
-            {discrepancies.length > 0 && (
-              <div className="discrepancy-list" style={{ marginBottom: '1.25rem' }}>
-                <h3>AI 탐지 결과</h3>
-                {discrepancies.map((d, i) => (
-                  <div key={i} className={`discrepancy-item ${d.damageLevel}`}>
-                    <div className="item-header">
-                      {d.damageLevel !== 'none' && (
-                        <AlertTriangle size={16} color={d.damageLevel === 'high' ? '#f43f5e' : '#f59e0b'} />
-                      )}
-                      <span className="room-step">{d.roomId} · {d.stepId}</span>
-                      <span className={`badge ${d.damageLevel}`}>{d.damageLevel.toUpperCase()}</span>
-                    </div>
-                    <p>{d.notes}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-
             <div className="report-actions">
               <button className="cta-btn" onClick={() => setView('hub')}>다시 촬영하기</button>
               {data.currentPhase === 'move-out' && (
@@ -1047,10 +987,6 @@ export default function App() {
           <button className={`nav-item ${view === 'hub' ? 'active' : ''}`} onClick={() => setView('hub')}>
             <Home size={22} />
             <span>홈</span>
-          </button>
-          <button className={`nav-item ${view === 'analyze' ? 'active' : ''}`} onClick={() => setView('analyze')}>
-            <ScanLine size={22} />
-            <span>분석</span>
           </button>
           <button className={`nav-item ${view === 'report' ? 'active' : ''}`} onClick={() => setView('report')}>
             <FileText size={22} />
