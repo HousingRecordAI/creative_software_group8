@@ -834,7 +834,7 @@ export default function App() {
                     {guideGenerationError.message}
                     {guideGenerationErrorElapsed ? ` (${guideGenerationErrorElapsed})` : ''}
                   </span>
-                  <small>기본 목록으로 넘어가지 않았습니다. Ollama가 켜져 있는지 확인한 뒤 전체 샷을 다시 촬영해 주세요.</small>
+                  <small>기본 목록으로 넘어가지 않았습니다. Claude API 설정을 확인한 뒤 전체 샷을 다시 촬영해 주세요.</small>
                 </div>
               )}
               {isReviewingCapture && (

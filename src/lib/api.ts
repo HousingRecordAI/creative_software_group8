@@ -11,8 +11,20 @@ export interface AnalysisData {
   summary: string;
 }
 
-const OLLAMA_URL = '/api/ollama/api/generate';
-const MODEL_NAME = import.meta.env.VITE_OLLAMA_MODEL || 'gemma4:e4b';
+const AI_GENERATE_URL = '/api/ai/generate';
+
+type AiImageInput = {
+  data: string;
+  mediaType: string;
+};
+
+type AiGenerateParams = {
+  label: string;
+  prompt: string;
+  images: AiImageInput[];
+  maxTokens: number;
+  temperature: number;
+};
 
 const DEFECT_ANALYSIS_PROMPT = `이 사진에서 다음 항목들을 한국어로 분석해줘:
 1. 발견된 하자 목록 (곰팡이, 스크래치, 균열, 누수, 변색 등)
@@ -27,12 +39,12 @@ const DEFECT_ANALYSIS_PROMPT = `이 사진에서 다음 항목들을 한국어�
   "summary": "전체 요약"
 }`;
 
-async function readFileAsBase64(file: File): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
+async function readFileAsAiImage(file: File): Promise<AiImageInput> {
+  return new Promise<AiImageInput>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
-      resolve(result.split(',')[1]);
+      resolve(dataUrlToAiImage(result, file.type || 'image/jpeg'));
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
@@ -54,7 +66,7 @@ function previewText(value: string, maxLength = 260) {
   return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;
 }
 
-async function readOllamaGenerateText(response: Response, label: string): Promise<string> {
+async function readAiGenerateText(response: Response, label: string): Promise<string> {
   const body = await response.text();
   if (!body.trim()) {
     throw new Error(`${label} 응답 본문이 비어 있습니다.`);
@@ -101,8 +113,19 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error && error.message ? error.message : '알 수 없는 오류가 발생했습니다.';
 }
 
-function dataUrlToBase64(dataUrl: string) {
-  return dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
+function dataUrlToAiImage(dataUrl: string, fallbackMediaType = 'image/jpeg'): AiImageInput {
+  const match = dataUrl.match(/^data:([^;,]+);base64,(.*)$/);
+  if (match) {
+    return {
+      mediaType: match[1],
+      data: match[2]
+    };
+  }
+
+  return {
+    mediaType: fallbackMediaType,
+    data: dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl
+  };
 }
 
 function normalizeStepId(value: string, fallback: string) {
@@ -111,6 +134,25 @@ function normalizeStepId(value: string, fallback: string) {
     .replace(/[^a-z0-9가-힣]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 36) || fallback;
+}
+
+async function generateWithClaude(params: AiGenerateParams): Promise<string> {
+  const response = await fetch(AI_GENERATE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt: params.prompt,
+      images: params.images,
+      maxTokens: params.maxTokens,
+      temperature: params.temperature
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Claude ${response.status}: ${await readErrorBody(response)}`);
+  }
+
+  return readAiGenerateText(response, params.label);
 }
 
 export async function generateCapturePlanFromOverview(params: {
@@ -148,24 +190,13 @@ JSON 형식으로만 반환:
 }`;
 
   try {
-    const response = await fetch(OLLAMA_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: MODEL_NAME,
-        prompt,
-        images: [dataUrlToBase64(params.imageDataUrl)],
-        stream: false,
-        format: 'json',
-        options: { temperature: 0.2, num_predict: 1600 }
-      }),
+    const modelOutput = await generateWithClaude({
+      label: '촬영 계획',
+      prompt,
+      images: [dataUrlToAiImage(params.imageDataUrl)],
+      maxTokens: 1800,
+      temperature: 0.2
     });
-
-    if (!response.ok) {
-      throw new Error(`Ollama ${response.status}: ${await readErrorBody(response)}`);
-    }
-
-    const modelOutput = await readOllamaGenerateText(response, '촬영 계획');
     const parsed = parseJsonObject(modelOutput, '촬영 계획');
     const tasks = Array.isArray(parsed.tasks)
       ? parsed.tasks.slice(0, 8).map((task: any, index: number): GuidedCaptureStep => {
@@ -233,24 +264,13 @@ JSON 형식으로만 반환:
 }`;
 
   try {
-    const response = await fetch(OLLAMA_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: MODEL_NAME,
-        prompt,
-        images: [dataUrlToBase64(params.imageDataUrl)],
-        stream: false,
-        format: 'json',
-        options: { temperature: 0.1, num_predict: 500 }
-      }),
+    const modelOutput = await generateWithClaude({
+      label: '사진 검수',
+      prompt,
+      images: [dataUrlToAiImage(params.imageDataUrl)],
+      maxTokens: 500,
+      temperature: 0.1
     });
-
-    if (!response.ok) {
-      throw new Error(`Ollama ${response.status}: ${await readErrorBody(response)}`);
-    }
-
-    const modelOutput = await readOllamaGenerateText(response, '사진 검수');
     const parsed = parseJsonObject(modelOutput, '사진 검수');
     if (parsed.status !== 'pass' && parsed.status !== 'retry') {
       throw new Error('AI 검수 응답의 status가 pass 또는 retry가 아닙니다.');
@@ -276,28 +296,17 @@ JSON 형식으로만 반환:
 }
 
 export async function analyzeImage(file: File): Promise<AnalysisData> {
-  const base64 = await readFileAsBase64(file);
+  const image = await readFileAsAiImage(file);
 
-  const response = await fetch(OLLAMA_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: MODEL_NAME,
-      prompt: DEFECT_ANALYSIS_PROMPT,
-      images: [base64],
-      stream: false,
-      format: 'json',
-      options: { temperature: 0.1 }
-    }),
+  const modelOutput = await generateWithClaude({
+    label: '하자 분석',
+    prompt: DEFECT_ANALYSIS_PROMPT,
+    images: [image],
+    maxTokens: 800,
+    temperature: 0.1
   });
 
-  if (!response.ok) {
-    const errorBody = await readErrorBody(response);
-    throw new Error(`Ollama failed with status ${response.status}: ${errorBody}`);
-  }
-
-  const data = await response.json();
-  return parseAnalysisData(data.response || '{}');
+  return parseAnalysisData(modelOutput);
 }
 
 /**
@@ -311,10 +320,10 @@ export interface DiscrepancyResult {
 }
 
 /**
- * Submits the move-out photos for real AI discrepancy detection using local Ollama.
+ * Submits the move-out photos for real AI discrepancy detection using Claude.
  */
 export async function submitMoveOutReport(moveInPhotos: any, moveOutPhotos: any): Promise<DiscrepancyResult[]> {
-  console.log('API Request: POST /api/generate (Real Multimodal Analysis)');
+  console.log('AI Request: POST /api/ai/generate (Claude multimodal analysis)');
   
   const results: DiscrepancyResult[] = [];
 
@@ -324,10 +333,6 @@ export async function submitMoveOutReport(moveInPhotos: any, moveOutPhotos: any)
       const inPhotoFull = moveInPhotos[roomId]?.[stepId]?.[0];
 
       if (outPhotoFull && inPhotoFull) {
-        // Strip the data:image/...;base64, prefix for Ollama
-        const outBase64 = outPhotoFull.split(',')[1];
-        const inBase64 = inPhotoFull.split(',')[1];
-
         const prompt = `
 Compare these two photos of the same room area: "${roomId} - ${stepId}".
 Image 1: Move-in state (Baseline).
@@ -342,26 +347,13 @@ Output format (REQUIRED):
         `;
 
         try {
-          const response = await fetch(OLLAMA_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: MODEL_NAME,
-              prompt: prompt,
-              images: [inBase64, outBase64],
-              stream: false,
-              options: { temperature: 0.1 }
-            })
+          const aiText = await generateWithClaude({
+            label: '퇴실 비교',
+            prompt,
+            images: [dataUrlToAiImage(inPhotoFull), dataUrlToAiImage(outPhotoFull)],
+            maxTokens: 800,
+            temperature: 0.1
           });
-
-          if (!response.ok) {
-            const errorBody = await readErrorBody(response);
-            console.error(`Ollama Error ${response.status}:`, errorBody);
-            throw new Error(`Ollama failed with status ${response.status}: ${errorBody}`);
-          }
-
-          const data = await response.json();
-          const aiText = data.response || '';
           console.log(`AI Output for ${roomId}/${stepId}:`, aiText);
 
           // Parse the AI's response for damageLevel and notes

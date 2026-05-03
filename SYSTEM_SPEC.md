@@ -57,22 +57,23 @@ House Record는 사진 개수를 고정하지 않는다. 각 공간의 첫 사�
 - PWA 지원
 - 모바일 카메라 기반 촬영 UI
 
-### 4.2 로컬 AI
+### 4.2 Claude AI
 
-- Ollama 로컬 API 사용
-- 기본 모델: `gemma4:e4b`
-- Vite dev proxy 경로: `/api/ollama`
-- 기본 Ollama host: `http://localhost:11434`
+- Anthropic Claude API 사용
+- 기본 모델: `claude-sonnet-4-6`
+- API 경로: `/api/ai/generate`
+- Cloudflare Pages 환경변수 `ANTHROPIC_API_KEY` 사용
+- 선택 환경변수 `CLAUDE_MODEL` 또는 `ANTHROPIC_MODEL`로 모델명 변경 가능
 - 환경 변수:
-  - `VITE_OLLAMA_HOST`
-  - `OLLAMA_HOST`
-  - `VITE_OLLAMA_MODEL`
+  - `ANTHROPIC_API_KEY`
+  - `CLAUDE_MODEL`
+  - `ANTHROPIC_MODEL`
 
-### 4.3 Vite Proxy
+### 4.3 API Key 보호
 
-브라우저는 직접 Ollama에 접근하지 않고 Vite dev server의 `/api/ollama` proxy를 통해 요청한다.
+브라우저는 Claude API를 직접 호출하지 않는다. 모든 AI 요청은 같은 도메인의 `/api/ai/generate` 서버 엔드포인트를 통해 처리한다.
 
-Cloudflare Tunnel을 사용할 때 브라우저 요청에는 `Origin: https://...trycloudflare.com` 헤더가 붙을 수 있다. Ollama는 이 Origin을 403으로 거절할 수 있으므로 Vite proxy는 Ollama로 전달되는 요청에서 `origin`, `referer` 헤더를 제거한다.
+배포 환경에서는 Cloudflare Pages Function이 `ANTHROPIC_API_KEY`를 읽어 Claude에 요청한다. 로컬 `bun run dev` 환경에서는 Vite dev middleware가 동일한 `/api/ai/generate` 경로를 제공한다.
 
 ### 4.4 데이터 저장
 
@@ -190,7 +191,7 @@ Cloudflare Tunnel을 사용할 때 브라우저 요청에는 `Origin: https://..
 
 ### F-005 AI 동적 촬영 체크포인트 생성
 
-각 공간의 첫 단계는 `전체 샷`이다. 사용자가 전체 샷을 촬영하면 시스템은 Ollama에 이미지를 전송하여 공간별 촬영 체크포인트를 생성한다.
+각 공간의 첫 단계는 `전체 샷`이다. 사용자가 전체 샷을 촬영하면 시스템은 Claude에 이미지를 전송하여 공간별 촬영 체크포인트를 생성한다.
 
 #### 입력
 
@@ -208,12 +209,10 @@ Cloudflare Tunnel을 사용할 때 브라우저 요청에는 `Origin: https://..
 - `coverageCriteria`에는 사용자가 빠뜨리면 안 되는 시야 요소를 2개에서 4개까지 넣는다.
 - 최소 3개, 최대 8개의 체크포인트를 반환한다.
 
-#### Ollama 요청 옵션
+#### Claude 요청 옵션
 
-- `stream: false`
-- `format: "json"`
 - `temperature: 0.2`
-- `num_predict: 1600`
+- `maxTokens: 1800`
 
 #### 출력 형식
 
@@ -236,12 +235,12 @@ Cloudflare Tunnel을 사용할 때 브라우저 요청에는 `Origin: https://..
 
 #### 실패 처리
 
-Ollama 호출 실패, HTTP 응답 파싱 실패, 모델 출력 JSON 파싱 실패, 항목 부족 시 기본 촬영 목록으로 대체하지 않는다.
+Claude 호출 실패, HTTP 응답 파싱 실패, 모델 출력 JSON 파싱 실패, 항목 부족 시 기본 촬영 목록으로 대체하지 않는다.
 
 - 사용자에게 실패 메시지와 소요시간을 표시한다.
 - AI 촬영 목록이 생성되지 않으면 다음 단계로 진행할 수 없다.
 - 에러 메시지는 가능한 경우 응답 원문 일부를 포함한다.
-- 사용자는 Ollama 실행 상태를 확인한 뒤 전체 샷을 다시 촬영해 재시도한다.
+- 사용자는 Cloudflare Pages 환경변수 또는 로컬 `.env`의 `ANTHROPIC_API_KEY` 설정을 확인한 뒤 전체 샷을 다시 촬영해 재시도한다.
 
 ### F-006 체크포인트 커버리지 판단
 
@@ -284,12 +283,10 @@ Ollama 호출 실패, HTTP 응답 파싱 실패, 모델 출력 JSON 파싱 실�
 - coverage criteria
 - 촬영 이미지
 
-#### Ollama 요청 옵션
+#### Claude 요청 옵션
 
-- `stream: false`
-- `format: "json"`
 - `temperature: 0.1`
-- `num_predict: 500`
+- `maxTokens: 500`
 
 #### 검수 기준
 
@@ -416,7 +413,7 @@ Ollama 호출 실패, HTTP 응답 파싱 실패, 모델 출력 JSON 파싱 실�
 
 ### F-013 퇴실 비교 분석
 
-퇴실 촬영 완료 후 입주 사진과 퇴실 사진을 Ollama에 전송하여 변경점을 분석한다.
+퇴실 촬영 완료 후 입주 사진과 퇴실 사진을 Claude에 전송하여 변경점을 분석한다.
 
 #### 입력
 
@@ -563,8 +560,8 @@ interface BlockchainProof {
 | React | UI 구현 |
 | TypeScript | 정적 타입 검사 |
 | localforage | IndexedDB 저장소 |
-| Ollama | 로컬 비전 모델 추론 |
-| gemma4:e4b | 기본 AI 모델 |
+| Claude API | 비전 모델 추론 |
+| claude-sonnet-4-6 | 기본 AI 모델 |
 | Cloudflare Tunnel | 모바일 HTTPS 접속 및 카메라 권한 테스트 |
 | Web Camera API | 모바일/브라우저 카메라 촬영 |
 
@@ -576,12 +573,13 @@ interface BlockchainProof {
 bun install
 ```
 
-### 9.2 Ollama 준비
+### 9.2 Claude 준비
 
 ```bash
-ollama list
-ollama pull gemma4:e4b
+cp .env.example .env
 ```
+
+로컬에서 AI 기능을 테스트하려면 `.env`에 `ANTHROPIC_API_KEY`를 넣는다. 배포 환경에서는 Cloudflare Pages 프로젝트 환경변수에 같은 키를 등록한다.
 
 ### 9.3 개발 서버 실행
 
@@ -638,8 +636,8 @@ bun run build
 
 - 촬영 품질 검사는 낮은 해상도 canvas 샘플링으로 수행한다.
 - AI 요청은 촬영 시점에만 발생한다.
-- 촬영 계획 생성은 긴 JSON 출력을 위해 `num_predict: 1600`을 사용한다.
-- 사진 검수는 짧은 JSON 출력을 위해 `num_predict: 500`을 사용한다.
+- 촬영 계획 생성은 긴 JSON 출력을 위해 `maxTokens: 1800`을 사용한다.
+- 사진 검수는 짧은 JSON 출력을 위해 `maxTokens: 500`을 사용한다.
 
 ## 11. 현재 한계
 

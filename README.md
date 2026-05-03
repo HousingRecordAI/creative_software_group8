@@ -1,6 +1,6 @@
 # House Record
 
-입주/퇴실 사진을 기록하고 로컬 Ollama 비전 모델로 하자와 변경점을 분석하는 Vite 앱입니다.
+입주/퇴실 사진을 기록하고 Claude 비전 모델로 촬영 계획, 사진 충분성, 변경점을 분석하는 Vite 앱입니다.
 
 ## 로컬 실행
 
@@ -9,7 +9,7 @@ bun install
 bun run dev
 ```
 
-기본 개발 서버는 로컬 Ollama API(`http://localhost:11434`)로 프록시합니다. Podman 같은 컨테이너 안에서 Vite를 실행해야 한다면 `.env`를 만들고 호스트만 바꾸면 됩니다.
+Claude API 키는 브라우저에 노출하지 않습니다. 배포 환경에서는 Cloudflare Pages의 프로젝트 환경변수에 `ANTHROPIC_API_KEY`를 등록하세요. 로컬에서 `bun run dev`로 AI 기능까지 테스트하려면 `.env`를 만들고 서버 전용 키를 넣습니다.
 
 ```bash
 cp .env.example .env
@@ -18,23 +18,18 @@ cp .env.example .env
 예시:
 
 ```env
-VITE_OLLAMA_HOST=http://host.containers.internal:11434
-VITE_OLLAMA_MODEL=gemma4:e4b
+ANTHROPIC_API_KEY=sk-ant-...
+CLAUDE_MODEL=claude-sonnet-4-6
 ```
 
-## Ollama 준비
+## Claude 준비
 
-앱의 기본 모델은 `gemma4:e4b`입니다. 다른 비전 모델을 쓰려면 `.env`의 `VITE_OLLAMA_MODEL`을 바꾸세요.
-
-```bash
-ollama list
-ollama pull gemma4:e4b
-```
+Cloudflare Pages에 배포된 앱은 같은 도메인의 `/api/ai/generate` Pages Function을 통해 Claude에 요청합니다. 로컬 개발 서버에서도 동일 경로가 Vite dev middleware로 동작합니다.
 
 ## 데모 흐름
 
 1. 공간별 첫 단계에서 전체 샷을 촬영합니다.
-2. Ollama가 전체 샷을 보고 세면대 하부, 배수구, 창틀처럼 빠지기 쉬운 추가 촬영 목록을 생성합니다.
+2. Claude가 전체 샷을 보고 세면대 하부, 배수구, 창틀처럼 빠지기 쉬운 추가 촬영 목록을 생성합니다.
 3. 사용자는 AI가 만든 촬영 목록을 따라 사진을 찍습니다.
 4. 각 사진은 증거 사진으로 충분한지 AI 검수를 받습니다.
 5. 입주 촬영을 끝내면 사진 원본이 아니라 사진 해시와 메타데이터로 만든 evidence root를 로컬 블록체인에 고정합니다.
