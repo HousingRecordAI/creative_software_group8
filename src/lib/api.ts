@@ -18,12 +18,38 @@ type AiImageInput = {
   mediaType: string;
 };
 
+type AiTask = 'capture_plan' | 'capture_review' | 'defect_analysis' | 'move_out_comparison';
+
 type AiGenerateParams = {
   label: string;
+  task: AiTask;
   prompt: string;
   images: AiImageInput[];
   maxTokens: number;
   temperature: number;
+};
+
+type AiErrorResponse = {
+  code?: string;
+  message?: string;
+  retryable?: boolean;
+  hint?: string;
+};
+
+type CapturePlanPayload = {
+  summary?: string;
+  tasks?: Array<Partial<GuidedCaptureStep>>;
+};
+
+type CaptureReviewPayload = {
+  status?: 'pass' | 'retry';
+  message?: string;
+  hint?: string;
+};
+
+type MoveOutComparisonPayload = {
+  damageLevel?: 'none' | 'low' | 'high';
+  notes?: string;
 };
 
 const DEFECT_ANALYSIS_PROMPT = `이 사진에서 다음 항목들을 한국어로 분석해줘:
@@ -31,13 +57,8 @@ const DEFECT_ANALYSIS_PROMPT = `이 사진에서 다음 항목들을 한국어�
 2. 각 하자의 위치와 심각도 (경미/보통/심각)
 3. 하자가 없으면 defects를 빈 배열로 반환
 
-아래 JSON 형식으로만 반환해줘:
-{
-  "defects": [
-    { "type": "하자종류", "location": "위치", "severity": "경미|보통|심각" }
-  ],
-  "summary": "전체 요약"
-}`;
+실내 하자 분석 대상 사진이 아니거나 판단하기 어려우면 분석 결과를 만들지 말고 재촬영이 필요하다고 반환한다.
+반드시 제공된 구조화 도구의 입력 스키마에 맞춰 반환한다.`;
 
 async function readFileAsAiImage(file: File): Promise<AiImageInput> {
   return new Promise<AiImageInput>((resolve, reject) => {
@@ -51,22 +72,12 @@ async function readFileAsAiImage(file: File): Promise<AiImageInput> {
   });
 }
 
-async function readErrorBody(response: Response): Promise<string> {
-  const body = await response.text();
-  try {
-    const parsed = JSON.parse(body);
-    return parsed.error || body;
-  } catch {
-    return body;
-  }
-}
-
 function previewText(value: string, maxLength = 260) {
   const compact = value.replace(/\s+/g, ' ').trim();
   return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;
 }
 
-async function readAiGenerateText(response: Response, label: string): Promise<string> {
+async function readAiStructuredData<T>(response: Response, label: string): Promise<T> {
   const body = await response.text();
   if (!body.trim()) {
     throw new Error(`${label} 응답 본문이 비어 있습니다.`);
@@ -79,34 +90,32 @@ async function readAiGenerateText(response: Response, label: string): Promise<st
     throw new Error(`${label} HTTP 응답 JSON 파싱 실패: ${getErrorMessage(error)} · body="${previewText(body)}"`);
   }
 
-  if (typeof data.response !== 'string' || data.response.trim().length === 0) {
-    throw new Error(`${label} 응답에 모델 출력 JSON이 없습니다. body="${previewText(body)}"`);
+  if (!response.ok) {
+    throw new Error(formatAiError(data, `${label} 요청 실패`));
   }
 
-  return data.response;
+  if (data?.ok === false) {
+    throw new Error(formatAiError(data, `${label}을 처리할 수 없습니다.`));
+  }
+
+  if (data?.ok !== true || typeof data !== 'object' || data.data === undefined) {
+    throw new Error(`${label} 표준 응답 형식이 아닙니다. body="${previewText(body)}"`);
+  }
+
+  return data.data as T;
 }
 
-function parseAnalysisData(rawText: string): AnalysisData {
-  const match = rawText.match(/\{[\s\S]*\}/);
-  try {
-    const parsed = JSON.parse(match?.[0] ?? rawText);
-    return {
-      defects: Array.isArray(parsed.defects) ? parsed.defects : [],
-      summary: typeof parsed.summary === 'string' ? parsed.summary : '분석 결과 요약이 없습니다.'
-    };
-  } catch {
-    return { defects: [], summary: '분석 결과를 파싱할 수 없습니다.' };
+function formatAiError(data: any, fallback: string) {
+  if (typeof data?.error === 'string' && data.error.trim()) {
+    return data.error;
   }
-}
-
-function parseJsonObject(rawText: string, label = '모델 출력'): any {
-  const match = rawText.match(/\{[\s\S]*\}/);
-  const jsonText = match?.[0] ?? rawText;
-  try {
-    return JSON.parse(jsonText);
-  } catch (error) {
-    throw new Error(`${label} JSON 파싱 실패: ${getErrorMessage(error)} · output="${previewText(rawText)}"`);
+  if (typeof data?.error?.message === 'string' && data.error.message.trim()) {
+    const hint = typeof data.error.hint === 'string' && data.error.hint.trim()
+      ? ` ${data.error.hint.trim()}`
+      : '';
+    return `${data.error.message.trim()}${hint}`;
   }
+  return fallback;
 }
 
 function getErrorMessage(error: unknown) {
@@ -136,11 +145,12 @@ function normalizeStepId(value: string, fallback: string) {
     .slice(0, 36) || fallback;
 }
 
-async function generateWithClaude(params: AiGenerateParams): Promise<string> {
+async function generateWithClaude<T>(params: AiGenerateParams): Promise<T> {
   const response = await fetch(AI_GENERATE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      task: params.task,
       prompt: params.prompt,
       images: params.images,
       maxTokens: params.maxTokens,
@@ -148,11 +158,7 @@ async function generateWithClaude(params: AiGenerateParams): Promise<string> {
     }),
   });
 
-  if (!response.ok) {
-    throw new Error(`Claude ${response.status}: ${await readErrorBody(response)}`);
-  }
-
-  return readAiGenerateText(response, params.label);
+  return readAiStructuredData<T>(response, params.label);
 }
 
 export async function generateCapturePlanFromOverview(params: {
@@ -173,31 +179,18 @@ export async function generateCapturePlanFromOverview(params: {
 - 각 항목은 사용자가 바로 따라할 수 있는 짧은 촬영 지시문이어야 한다.
 - 최대 8개, 최소 3개 항목만 반환한다.
 
-JSON 형식으로만 반환:
-{
-  "summary": "전체 샷에서 확인한 공간 요약",
-  "tasks": [
-    {
-      "id": "short-kebab-id",
-      "label": "촬영 항목명",
-      "guide": "사용자에게 보여줄 한 문장 촬영 지시",
-      "target": "대상 설비",
-      "angle": "wide|detail|low",
-      "minPhotos": 1,
-      "coverageCriteria": ["반드시 보여야 하는 요소"]
-    }
-  ]
-}`;
+이미지가 실내 전체 샷으로 보기 어렵거나 공간 구조를 판단할 수 없으면 촬영 목록을 만들지 말고 재촬영이 필요하다고 반환한다.
+반드시 제공된 구조화 도구의 입력 스키마에 맞춰 반환한다.`;
 
   try {
-    const modelOutput = await generateWithClaude({
+    const parsed = await generateWithClaude<CapturePlanPayload>({
       label: '촬영 계획',
+      task: 'capture_plan',
       prompt,
       images: [dataUrlToAiImage(params.imageDataUrl)],
       maxTokens: 1800,
       temperature: 0.2
     });
-    const parsed = parseJsonObject(modelOutput, '촬영 계획');
     const tasks = Array.isArray(parsed.tasks)
       ? parsed.tasks.slice(0, 8).map((task: any, index: number): GuidedCaptureStep => {
           const minPhotos = Number(task.minPhotos);
@@ -256,22 +249,18 @@ export async function reviewGuidedCapture(params: {
 사진이 이 촬영 지시를 증거 사진으로 충분히 만족하는지 평가해라.
 하자 있음/없음은 판단하지 말고, 사진이 충분한지만 판단한다.
 
-JSON 형식으로만 반환:
-{
-  "status": "pass|retry",
-  "message": "사진 충분 여부를 짧게 설명",
-  "hint": "retry일 때 다시 찍는 각도나 위치"
-}`;
+사진이 촬영 지시와 무관하거나 너무 흐리면 retry로 판단하고, 사용자가 다시 찍을 수 있는 구체적인 hint를 제공한다.
+반드시 제공된 구조화 도구의 입력 스키마에 맞춰 반환한다.`;
 
   try {
-    const modelOutput = await generateWithClaude({
+    const parsed = await generateWithClaude<CaptureReviewPayload>({
       label: '사진 검수',
+      task: 'capture_review',
       prompt,
       images: [dataUrlToAiImage(params.imageDataUrl)],
       maxTokens: 500,
       temperature: 0.1
     });
-    const parsed = parseJsonObject(modelOutput, '사진 검수');
     if (parsed.status !== 'pass' && parsed.status !== 'retry') {
       throw new Error('AI 검수 응답의 status가 pass 또는 retry가 아닙니다.');
     }
@@ -298,15 +287,19 @@ JSON 형식으로만 반환:
 export async function analyzeImage(file: File): Promise<AnalysisData> {
   const image = await readFileAsAiImage(file);
 
-  const modelOutput = await generateWithClaude({
+  const result = await generateWithClaude<AnalysisData>({
     label: '하자 분석',
+    task: 'defect_analysis',
     prompt: DEFECT_ANALYSIS_PROMPT,
     images: [image],
     maxTokens: 800,
     temperature: 0.1
   });
 
-  return parseAnalysisData(modelOutput);
+  return {
+    defects: Array.isArray(result.defects) ? result.defects : [],
+    summary: typeof result.summary === 'string' ? result.summary : '분석 결과 요약이 없습니다.'
+  };
 }
 
 /**
@@ -341,31 +334,27 @@ Image 2: Move-out state (Current).
 Identify any new physical damage (scuffs, cracks, stains, holes) that wasn't there in Image 1. 
 Ignore lighting, camera angle, and lens distortion.
 
-Output format (REQUIRED):
-1. Damage Level: [none | low | high]
-2. Analysis Note: [One sentence description]
+Return the result through the provided structured tool schema.
+Damage level must be one of none, low, or high.
+The notes field must contain one concise sentence.
         `;
 
         try {
-          const aiText = await generateWithClaude({
+          const comparison = await generateWithClaude<MoveOutComparisonPayload>({
             label: '퇴실 비교',
+            task: 'move_out_comparison',
             prompt,
             images: [dataUrlToAiImage(inPhotoFull), dataUrlToAiImage(outPhotoFull)],
             maxTokens: 800,
             temperature: 0.1
           });
-          console.log(`AI Output for ${roomId}/${stepId}:`, aiText);
-
-          // Parse the AI's response for damageLevel and notes
-          let damageLevel: 'none' | 'low' | 'high' = 'none';
-          if (aiText.toLowerCase().includes('high')) damageLevel = 'high';
-          else if (aiText.toLowerCase().includes('low')) damageLevel = 'low';
+          console.log(`AI Output for ${roomId}/${stepId}:`, comparison);
 
           results.push({
             roomId,
             stepId,
-            damageLevel,
-            notes: aiText.split('\n').filter((l: string) => l.trim()).join(' ') // Clean up line breaks
+            damageLevel: comparison.damageLevel || 'none',
+            notes: comparison.notes || '새로운 손상 여부를 판단할 수 없습니다.'
           });
 
         } catch (error) {

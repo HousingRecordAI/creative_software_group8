@@ -26,6 +26,8 @@ CLAUDE_MODEL=claude-sonnet-4-6
 
 Cloudflare Pages에 배포된 앱은 같은 도메인의 `/api/ai/generate` Pages Function을 통해 Claude에 요청합니다. 로컬 개발 서버에서도 동일 경로가 Vite dev middleware로 동작합니다.
 
+AI 응답은 Claude tool schema로 구조화됩니다. 브라우저는 자유 텍스트 JSON을 직접 파싱하지 않고, 서버가 반환하는 `{ ok, data, error }` 표준 응답만 처리합니다.
+
 ## 데모 흐름
 
 1. 공간별 첫 단계에서 전체 샷을 촬영합니다.

@@ -64,6 +64,7 @@ House Record는 사진 개수를 고정하지 않는다. 각 공간의 첫 사�
 - API 경로: `/api/ai/generate`
 - Cloudflare Pages 환경변수 `ANTHROPIC_API_KEY` 사용
 - 선택 환경변수 `CLAUDE_MODEL` 또는 `ANTHROPIC_MODEL`로 모델명 변경 가능
+- Claude tool use를 강제하여 모델 응답을 서버에서 구조화한다.
 - 환경 변수:
   - `ANTHROPIC_API_KEY`
   - `CLAUDE_MODEL`
@@ -74,6 +75,16 @@ House Record는 사진 개수를 고정하지 않는다. 각 공간의 첫 사�
 브라우저는 Claude API를 직접 호출하지 않는다. 모든 AI 요청은 같은 도메인의 `/api/ai/generate` 서버 엔드포인트를 통해 처리한다.
 
 배포 환경에서는 Cloudflare Pages Function이 `ANTHROPIC_API_KEY`를 읽어 Claude에 요청한다. 로컬 `bun run dev` 환경에서는 Vite dev middleware가 동일한 `/api/ai/generate` 경로를 제공한다.
+
+`/api/ai/generate`는 Claude의 자유 텍스트를 그대로 반환하지 않는다. 요청별 `task`에 맞는 tool schema를 강제하고, tool input을 검증한 뒤 아래 표준 envelope로 반환한다.
+
+```json
+{ "ok": true, "data": {}, "model": "claude-sonnet-4-6", "usage": {} }
+```
+
+```json
+{ "ok": false, "error": { "code": "not_room_or_low_quality", "message": "재촬영 안내", "retryable": true } }
+```
 
 ### 4.4 데이터 저장
 
@@ -214,32 +225,36 @@ House Record는 사진 개수를 고정하지 않는다. 각 공간의 첫 사�
 - `temperature: 0.2`
 - `maxTokens: 1800`
 
-#### 출력 형식
+#### 서버 표준 출력 형식
 
 ```json
 {
-  "summary": "전체 샷에서 확인한 공간 요약",
-  "tasks": [
-    {
-      "id": "desk-under-floor",
-      "label": "책상 아래 바닥",
-      "guide": "카메라를 낮춰 책상 아래 바닥과 벽 모서리가 함께 보이도록 찍어주세요.",
-      "target": "책상 아래",
-      "angle": "low",
-      "minPhotos": 2,
-      "coverageCriteria": ["책상 아래 바닥", "벽과 바닥 경계", "어두운 모서리"]
-    }
-  ]
+  "ok": true,
+  "data": {
+    "summary": "전체 샷에서 확인한 공간 요약",
+    "tasks": [
+      {
+        "id": "desk-under-floor",
+        "label": "책상 아래 바닥",
+        "guide": "카메라를 낮춰 책상 아래 바닥과 벽 모서리가 함께 보이도록 찍어주세요.",
+        "target": "책상 아래",
+        "angle": "low",
+        "minPhotos": 2,
+        "coverageCriteria": ["책상 아래 바닥", "벽과 바닥 경계", "어두운 모서리"]
+      }
+    ]
+  }
 }
 ```
 
 #### 실패 처리
 
-Claude 호출 실패, HTTP 응답 파싱 실패, 모델 출력 JSON 파싱 실패, 항목 부족 시 기본 촬영 목록으로 대체하지 않는다.
+Claude 호출 실패, HTTP 응답 파싱 실패, tool output 누락, 항목 부족, 전체 샷 판별 불가 시 기본 촬영 목록으로 대체하지 않는다.
 
 - 사용자에게 실패 메시지와 소요시간을 표시한다.
 - AI 촬영 목록이 생성되지 않으면 다음 단계로 진행할 수 없다.
-- 에러 메시지는 가능한 경우 응답 원문 일부를 포함한다.
+- 에러 메시지는 서버 표준 envelope의 `error.message`를 우선 표시한다.
+- 실내 전체 샷으로 보기 어렵거나 테스트용 무관한 사진이면 재촬영 가능한 오류로 표시한다.
 - 사용자는 Cloudflare Pages 환경변수 또는 로컬 `.env`의 `ANTHROPIC_API_KEY` 설정을 확인한 뒤 전체 샷을 다시 촬영해 재시도한다.
 
 ### F-006 체크포인트 커버리지 판단
@@ -296,13 +311,16 @@ Claude 호출 실패, HTTP 응답 파싱 실패, 모델 출력 JSON 파싱 실�
 - coverage criteria가 사진에 드러나는가
 - 사진이 너무 어둡거나 가까워 증거로 쓰기 어려운가
 
-#### 출력 형식
+#### 서버 표준 출력 형식
 
 ```json
 {
-  "status": "pass",
-  "message": "증거 사진으로 충분합니다.",
-  "hint": "필요 시 더 낮은 각도에서 한 장 추가로 촬영하세요."
+  "ok": true,
+  "data": {
+    "status": "pass",
+    "message": "증거 사진으로 충분합니다.",
+    "hint": "필요 시 더 낮은 각도에서 한 장 추가로 촬영하세요."
+  }
 }
 ```
 
@@ -624,7 +642,7 @@ bun run build
 - AI 촬영 계획 실패 시 기본 목록으로 자동 대체하지 않는다.
 - AI 검수 실패 시 기본 검수 메시지로 자동 대체하지 않는다.
 - 실패 원인을 UI에 표시하고 사용자가 재시도할 수 있게 한다.
-- JSON 파싱 실패 시 가능한 경우 응답 원문 일부를 에러 메시지에 포함한다.
+- Claude 응답은 tool schema 기반 표준 envelope로 변환하여 클라이언트의 raw JSON 파싱 실패를 방지한다.
 
 ### 10.3 모바일 접근성
 
