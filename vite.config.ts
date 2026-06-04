@@ -2,6 +2,8 @@ import { defineConfig } from 'vitest/config';
 import { loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+import fs from 'fs';
+import path from 'path';
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
 const DEMO_CAPTURE_TASK_LIMIT = 2;
@@ -303,15 +305,68 @@ function claudeDevApi(env: Record<string, string>) {
   return {
     name: 'house-record-claude-dev-api',
     configureServer(server: any) {
-      server.middlewares.use('/api/ai/generate', async (req: any, res: any, next: any) => {
+      server.middlewares.use('/api/upload', async (req: any, res: any, next: any) => {
         if (req.method !== 'POST') {
           next();
           return;
         }
 
-        const apiKey = env.ANTHROPIC_API_KEY;
-        if (!apiKey) {
-          writeJson(res, 500, errorEnvelope('missing_api_key', 'ANTHROPIC_API_KEY not configured', false));
+        try {
+          const body = JSON.parse(await readRequestBody(req));
+          const imageData = body.image;
+          if (!imageData) {
+            writeJson(res, 400, { ok: false, error: 'Missing image data' });
+            return;
+          }
+
+          const matches = imageData.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+          if (!matches || matches.length !== 3) {
+            writeJson(res, 400, { ok: false, error: 'Invalid base64 image data format' });
+            return;
+          }
+
+          const imageBuffer = Buffer.from(matches[2], 'base64');
+          const uploadDir = path.join(process.cwd(), 'public', 'uploads');
+          if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+          }
+
+          const filename = `img_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.jpg`;
+          const filepath = path.join(uploadDir, filename);
+          fs.writeFileSync(filepath, imageBuffer);
+
+          writeJson(res, 200, { ok: true, url: `/uploads/${filename}` });
+        } catch (error: any) {
+          writeJson(res, 500, { ok: false, error: error?.message || 'Server error uploading image' });
+        }
+      });
+
+      server.middlewares.use('/api/reset', async (req: any, res: any, next: any) => {
+        if (req.method !== 'POST') {
+          next();
+          return;
+        }
+
+        try {
+          const uploadDir = path.join(process.cwd(), 'public', 'uploads');
+          if (fs.existsSync(uploadDir)) {
+            const files = fs.readdirSync(uploadDir);
+            for (const file of files) {
+              const filePath = path.join(uploadDir, file);
+              if (fs.statSync(filePath).isFile()) {
+                fs.unlinkSync(filePath);
+              }
+            }
+          }
+          writeJson(res, 200, { ok: true, message: 'All server uploaded assets purged successfully' });
+        } catch (error: any) {
+          writeJson(res, 500, { ok: false, error: error?.message || 'Server error resetting assets' });
+        }
+      });
+
+      server.middlewares.use('/api/ai/generate', async (req: any, res: any, next: any) => {
+        if (req.method !== 'POST') {
+          next();
           return;
         }
 
@@ -334,68 +389,163 @@ function claudeDevApi(env: Record<string, string>) {
           return;
         }
 
-        const images = Array.isArray(body.images) ? body.images : [];
-        const maxTokens = clampNumber(body.maxTokens, 1, 4096, 1024);
-        const temperature = clampNumber(body.temperature, 0, 1, 0.1);
-        const model = env.CLAUDE_MODEL || env.ANTHROPIC_MODEL || DEFAULT_CLAUDE_MODEL;
-        const toolName = TASK_TO_TOOL[body.task];
-
-        const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({
-            model,
-            max_tokens: maxTokens,
-            temperature,
-            system: 'You are a housing inspection assistant. Use the forced tool exactly once. Do not return free-form text. If the image is not usable for the requested task, set ok=false with a concise Korean error message and retryable=true.',
-            tools: TOOL_DEFINITIONS,
-            tool_choice: { type: 'tool', name: toolName },
-            messages: [
-              {
-                role: 'user',
-                content: [
-                  ...images.map(toClaudeImageBlock),
-                  { type: 'text', text: prompt },
-                ],
-              },
-            ],
-          }),
+        const rawImages = Array.isArray(body.images) ? body.images : [];
+        const images = rawImages.map(img => {
+          if (img.data.startsWith('/uploads/')) {
+            const filePath = path.join(process.cwd(), 'public', img.data);
+            if (fs.existsSync(filePath)) {
+              try {
+                const fileBuffer = fs.readFileSync(filePath);
+                return {
+                  ...img,
+                  data: fileBuffer.toString('base64')
+                };
+              } catch (err) {
+                console.error('Failed to read visual image from file:', err);
+              }
+            }
+          }
+          return img;
         });
+        const aiMode = body.aiMode || 'claude';
 
-        if (!claudeRes.ok) {
-          const errorText = await claudeRes.text();
-          writeJson(res, 502, errorEnvelope('claude_api_error', `Claude API error: ${errorText}`, true));
-          return;
-        }
+        if (aiMode === 'ollama') {
+          try {
+            const model = "gemma4";
+            const ollamaUrl = "http://127.0.0.1:11434/api/generate";
+            const ollamaImages = images.map(img => img.data);
+            const toolName = TASK_TO_TOOL[body.task];
+            const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
+            const schemaPrompt = `\n\n[IMPORTANT] You must answer with a JSON object conforming exactly to this schema:
+${JSON.stringify(toolDef?.input_schema, null, 2)}
+Return raw JSON without markdown blocks. Do NOT wrap inside \`\`\`json ... \`\`\`. Start with { and end with }.`;
 
-        const claudeData = await claudeRes.json();
-        const toolInput = extractToolInput(claudeData, toolName);
-        if (!toolInput) {
-          writeJson(res, 502, errorEnvelope('missing_tool_output', 'Claude returned no structured tool output', true));
-          return;
-        }
+            const fullPrompt = prompt + schemaPrompt;
 
-        const normalized = normalizeToolInput(body.task, toolInput);
-        if (!normalized.ok) {
+            const ollamaRes = await fetch(ollamaUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                model,
+                prompt: fullPrompt,
+                images: ollamaImages,
+                options: {
+                  temperature: 0.1
+                },
+                stream: false,
+                format: 'json'
+              })
+            });
+
+            if (!ollamaRes.ok) {
+              const errText = await ollamaRes.text();
+              writeJson(res, 502, errorEnvelope('ollama_api_error', `Ollama가 꺼져 있거나 gemma4 모델이 실행 중이지 않습니다. 에러: ${errText}`, true));
+              return;
+            }
+
+            const ollamaData = await ollamaRes.json();
+            const responseText = ollamaData?.response || '{}';
+
+            let parsedOutput: any;
+            try {
+              parsedOutput = JSON.parse(responseText);
+            } catch (parseErr) {
+              writeJson(res, 502, errorEnvelope('ollama_invalid_json', `Ollama 응답 JSON 파싱 실패: ${responseText}`, true));
+              return;
+            }
+
+            const normalized = normalizeToolInput(body.task, parsedOutput);
+            if (!normalized.ok) {
+              writeJson(res, 200, {
+                ok: false,
+                error: normalized.error,
+                model: model,
+                usage: {}
+              });
+              return;
+            }
+
+            writeJson(res, 200, {
+              ok: true,
+              data: normalized.data,
+              model: model,
+              usage: {}
+            });
+            return;
+
+          } catch (error: any) {
+            writeJson(res, 502, errorEnvelope('ollama_connection_error', `Ollama 서버 접속 실패. 로컬에 Ollama가 실행 중이고 gemma4 모델이 설치되어 있는지 확인하세요. (${error?.message})`, true));
+            return;
+          }
+        } else {
+          const apiKey = env.ANTHROPIC_API_KEY;
+          if (!apiKey) {
+            writeJson(res, 500, errorEnvelope('missing_api_key', 'ANTHROPIC_API_KEY not configured', false));
+            return;
+          }
+
+          const maxTokens = clampNumber(body.maxTokens, 1, 4096, 1024);
+          const temperature = clampNumber(body.temperature, 0, 1, 0.1);
+          const model = env.CLAUDE_MODEL || env.ANTHROPIC_MODEL || DEFAULT_CLAUDE_MODEL;
+          const toolName = TASK_TO_TOOL[body.task];
+
+          const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': apiKey,
+              'anthropic-version': '2023-06-01',
+            },
+            body: JSON.stringify({
+              model,
+              max_tokens: maxTokens,
+              temperature,
+              system: 'You are a housing inspection assistant. Use the forced tool exactly once. Do not return free-form text. If the image is not usable for the requested task, set ok=false with a concise Korean error message and retryable=true.',
+              tools: TOOL_DEFINITIONS,
+              tool_choice: { type: 'tool', name: toolName },
+              messages: [
+                {
+                  role: 'user',
+                  content: [
+                    ...images.map(toClaudeImageBlock),
+                    { type: 'text', text: prompt },
+                  ],
+                },
+              ],
+            }),
+          });
+
+          if (!claudeRes.ok) {
+            const errorText = await claudeRes.text();
+            writeJson(res, 502, errorEnvelope('claude_api_error', `Claude API error: ${errorText}`, true));
+            return;
+          }
+
+          const claudeData = await claudeRes.json();
+          const toolInput = extractToolInput(claudeData, toolName);
+          if (!toolInput) {
+            writeJson(res, 502, errorEnvelope('missing_tool_output', 'Claude returned no structured tool output', true));
+            return;
+          }
+
+          const normalized = normalizeToolInput(body.task, toolInput);
+          if (!normalized.ok) {
+            writeJson(res, 200, {
+              ok: false,
+              error: normalized.error,
+              model: claudeData.model || model,
+              usage: claudeData.usage,
+            });
+            return;
+          }
+
           writeJson(res, 200, {
-            ok: false,
-            error: normalized.error,
+            ok: true,
+            data: normalized.data,
             model: claudeData.model || model,
             usage: claudeData.usage,
           });
-          return;
         }
-
-        writeJson(res, 200, {
-          ok: true,
-          data: normalized.data,
-          model: claudeData.model || model,
-          usage: claudeData.usage,
-        });
       });
     },
   };

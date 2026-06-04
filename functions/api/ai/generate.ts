@@ -15,6 +15,7 @@ type AiGenerateRequest = {
   images?: AiImageInput[];
   maxTokens?: number;
   temperature?: number;
+  aiMode?: 'claude' | 'ollama';
 };
 
 type AiTask = 'capture_plan' | 'capture_review' | 'defect_analysis' | 'move_out_comparison';
@@ -112,11 +113,6 @@ const TOOL_DEFINITIONS = [
 ];
 
 export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
-  const apiKey = env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return json(errorEnvelope('missing_api_key', 'ANTHROPIC_API_KEY not configured', false), 500);
-  }
-
   let body: AiGenerateRequest;
   try {
     body = await request.json();
@@ -133,65 +129,154 @@ export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
     return json(errorEnvelope('unsupported_task', 'Missing or unsupported AI task', false), 400);
   }
 
-  const images = Array.isArray(body.images) ? body.images : [];
-  const maxTokens = clampNumber(body.maxTokens, 1, 4096, 1024);
-  const temperature = clampNumber(body.temperature, 0, 1, 0.1);
-  const model = env.CLAUDE_MODEL || env.ANTHROPIC_MODEL || DEFAULT_CLAUDE_MODEL;
-  const toolName = TASK_TO_TOOL[body.task];
+  const rawImages = Array.isArray(body.images) ? body.images : [];
+  const images = await Promise.all(rawImages.map(async (img) => {
+    if (img.data.startsWith('/uploads/')) {
+      try {
+        const origin = new URL(request.url).origin;
+        const imgUrl = `${origin}${img.data}`;
+        const res = await fetch(imgUrl);
+        if (res.ok) {
+          const arrayBuffer = await res.arrayBuffer();
+          const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+          return { ...img, data: base64 };
+        }
+      } catch (err) {
+        console.error('Failed to fetch and convert image from URL:', err);
+      }
+    }
+    return img;
+  }));
+  const aiMode = body.aiMode || 'claude';
 
-  const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      temperature,
-      system: 'You are a housing inspection assistant. Use the forced tool exactly once. Do not return free-form text. If the image is not usable for the requested task, set ok=false with a concise Korean error message and retryable=true.',
-      tools: TOOL_DEFINITIONS,
-      tool_choice: { type: 'tool', name: toolName },
-      messages: [
-        {
-          role: 'user',
-          content: [
-            ...images.map(toClaudeImageBlock),
-            { type: 'text', text: prompt },
-          ],
-        },
-      ],
-    }),
-  });
+  if (aiMode === 'ollama') {
+    try {
+      const model = "gemma4";
+      const ollamaUrl = "http://127.0.0.1:11434/api/generate";
+      const ollamaImages = images.map(img => img.data);
+      const toolName = TASK_TO_TOOL[body.task];
+      const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
+      const schemaPrompt = `\n\n[IMPORTANT] You must answer with a JSON object conforming exactly to this schema:
+${JSON.stringify(toolDef?.input_schema, null, 2)}
+Return raw JSON without markdown blocks. Do NOT wrap inside \`\`\`json ... \`\`\`. Start with { and end with }.`;
 
-  if (!claudeRes.ok) {
-    const errorText = await claudeRes.text();
-    return json(errorEnvelope('claude_api_error', `Claude API error: ${errorText}`, true), 502);
-  }
+      const fullPrompt = prompt + schemaPrompt;
 
-  const claudeData: any = await claudeRes.json();
-  const toolInput = extractToolInput(claudeData, toolName);
-  if (!toolInput) {
-    return json(errorEnvelope('missing_tool_output', 'Claude returned no structured tool output', true), 502);
-  }
+      const ollamaRes = await fetch(ollamaUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          prompt: fullPrompt,
+          images: ollamaImages,
+          options: {
+            temperature: 0.1
+          },
+          stream: false,
+          format: 'json'
+        })
+      });
 
-  const normalized = normalizeToolInput(body.task, toolInput);
-  if (!normalized.ok) {
+      if (!ollamaRes.ok) {
+        const errText = await ollamaRes.text();
+        return json(errorEnvelope('ollama_api_error', `Ollama가 꺼져 있거나 gemma4 모델이 실행 중이지 않습니다. 에러: ${errText}`, true), 502);
+      }
+
+      const ollamaData = await ollamaRes.json();
+      const responseText = ollamaData?.response || '{}';
+
+      let parsedOutput: any;
+      try {
+        parsedOutput = JSON.parse(responseText);
+      } catch (parseErr) {
+        return json(errorEnvelope('ollama_invalid_json', `Ollama 응답 JSON 파싱 실패: ${responseText}`, true), 502);
+      }
+
+      const normalized = normalizeToolInput(body.task, parsedOutput);
+      if (!normalized.ok) {
+        return json({
+          ok: false,
+          error: normalized.error,
+          model: model,
+          usage: {}
+        }, 200);
+      }
+
+      return json({
+        ok: true,
+        data: normalized.data,
+        model: model,
+        usage: {}
+      }, 200);
+
+    } catch (error: any) {
+      return json(errorEnvelope('ollama_connection_error', `Ollama 서버 접속 실패. 로컬에 Ollama가 실행 중이고 gemma4 모델이 설치되어 있는지 확인하세요. (${error?.message})`, true), 502);
+    }
+  } else {
+    const apiKey = env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return json(errorEnvelope('missing_api_key', 'ANTHROPIC_API_KEY not configured', false), 500);
+    }
+
+    const maxTokens = clampNumber(body.maxTokens, 1, 4096, 1024);
+    const temperature = clampNumber(body.temperature, 0, 1, 0.1);
+    const model = env.CLAUDE_MODEL || env.ANTHROPIC_MODEL || DEFAULT_CLAUDE_MODEL;
+    const toolName = TASK_TO_TOOL[body.task];
+
+    const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens,
+        temperature,
+        system: 'You are a housing inspection assistant. Use the forced tool exactly once. Do not return free-form text. If the image is not usable for the requested task, set ok=false with a concise Korean error message and retryable=true.',
+        tools: TOOL_DEFINITIONS,
+        tool_choice: { type: 'tool', name: toolName },
+        messages: [
+          {
+            role: 'user',
+            content: [
+              ...images.map(toClaudeImageBlock),
+              { type: 'text', text: prompt },
+            ],
+          },
+        ],
+      }),
+    });
+
+    if (!claudeRes.ok) {
+      const errorText = await claudeRes.text();
+      return json(errorEnvelope('claude_api_error', `Claude API error: ${errorText}`, true), 502);
+    }
+
+    const claudeData: any = await claudeRes.json();
+    const toolInput = extractToolInput(claudeData, toolName);
+    if (!toolInput) {
+      return json(errorEnvelope('missing_tool_output', 'Claude returned no structured tool output', true), 502);
+    }
+
+    const normalized = normalizeToolInput(body.task, toolInput);
+    if (!normalized.ok) {
+      return json({
+        ok: false,
+        error: normalized.error,
+        model: claudeData.model || model,
+        usage: claudeData.usage,
+      }, 200);
+    }
+
     return json({
-      ok: false,
-      error: normalized.error,
+      ok: true,
+      data: normalized.data,
       model: claudeData.model || model,
       usage: claudeData.usage,
     }, 200);
   }
-
-  return json({
-    ok: true,
-    data: normalized.data,
-    model: claudeData.model || model,
-    usage: claudeData.usage,
-  }, 200);
 };
 
 function toClaudeImageBlock(image: AiImageInput) {

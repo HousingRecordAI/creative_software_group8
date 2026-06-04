@@ -31,6 +31,7 @@ type AiGenerateParams = {
   images: AiImageInput[];
   maxTokens: number;
   temperature: number;
+  aiMode?: 'claude' | 'ollama';
 };
 
 type AiErrorResponse = {
@@ -158,7 +159,8 @@ async function generateWithClaude<T>(params: AiGenerateParams): Promise<T> {
       prompt: params.prompt,
       images: params.images,
       maxTokens: params.maxTokens,
-      temperature: params.temperature
+      temperature: params.temperature,
+      aiMode: params.aiMode
     }),
   });
 
@@ -169,6 +171,7 @@ export async function generateCapturePlanFromOverview(params: {
   roomName: string;
   roomTypeId: string;
   imageDataUrl: string;
+  aiMode?: 'claude' | 'ollama';
 }): Promise<CapturePlan> {
   const startedAt = performance.now();
   const prompt = `너는 임차인 보증금 분쟁을 대비하는 사진 촬영 감독이다.
@@ -177,7 +180,8 @@ export async function generateCapturePlanFromOverview(params: {
 
 중요 원칙:
 - "하자 있음/없음"을 단정하지 말고, 증거로 확인해야 하는 위치를 제안한다.
-- 세면대, 싱크대, 변기, 배수구처럼 아래쪽/하부가 중요한 설비는 반드시 낮은 각도 촬영을 제안한다.
+- 세면대, 싱크대, 변기, 배수구처럼 아래쪽/하부가 중요한 설비는 반드시 낮은 각도 촬영을 제안하되, 이는 화장실(Bathroom)이나 부엌(Kitchen) 공간에만 한정한다.
+- 현재 점검 중인 공간 "${params.roomName}"에 존재하지 않는 설비(예: 방인데 배수구, 수전, 변기, 싱크대를 찍으라고 하는 경우)는 절대 제안 목록에 포함해서는 안 된다. 방(Bedroom)이나 거실(Living room)인 경우 벽면 균열, 바닥 모서리/들뜸, 콘센트, 창문 틈새 등을 중심으로 촬영 가이드를 제안해야 한다.
 - 데모 모드에서는 사용자가 빠르게 통과할 수 있도록 가장 중요한 추가 촬영만 고른다.
 - 모든 항목의 minPhotos는 1로 둔다.
 - coverageCriteria에는 사용자가 빠뜨리면 안 되는 시야 요소를 1~2개만 넣는다.
@@ -194,7 +198,8 @@ export async function generateCapturePlanFromOverview(params: {
       prompt,
       images: [dataUrlToAiImage(params.imageDataUrl)],
       maxTokens: 1800,
-      temperature: 0.2
+      temperature: 0.2,
+      aiMode: params.aiMode
     });
     const tasks = Array.isArray(parsed.tasks)
       ? parsed.tasks.slice(0, DEMO_CAPTURE_TASK_LIMIT).map((task: any, index: number): GuidedCaptureStep => {
@@ -245,6 +250,7 @@ export async function reviewGuidedCapture(params: {
   roomName: string;
   step: GuidedCaptureStep;
   imageDataUrl: string;
+  aiMode?: 'claude' | 'ollama';
 }): Promise<CaptureReview> {
   const startedAt = performance.now();
   if (DEMO_EASY_PASS) {
@@ -278,7 +284,8 @@ export async function reviewGuidedCapture(params: {
       prompt,
       images: [dataUrlToAiImage(params.imageDataUrl)],
       maxTokens: 500,
-      temperature: 0.1
+      temperature: 0.1,
+      aiMode: params.aiMode
     });
     if (parsed.status !== 'pass' && parsed.status !== 'retry') {
       throw new Error('AI 검수 응답의 status가 pass 또는 retry가 아닙니다.');
@@ -303,7 +310,7 @@ export async function reviewGuidedCapture(params: {
   }
 }
 
-export async function analyzeImage(file: File): Promise<AnalysisData> {
+export async function analyzeImage(file: File, aiMode?: 'claude' | 'ollama'): Promise<AnalysisData> {
   const image = await readFileAsAiImage(file);
 
   const result = await generateWithClaude<AnalysisData>({
@@ -312,7 +319,8 @@ export async function analyzeImage(file: File): Promise<AnalysisData> {
     prompt: DEFECT_ANALYSIS_PROMPT,
     images: [image],
     maxTokens: 800,
-    temperature: 0.1
+    temperature: 0.1,
+    aiMode
   });
 
   return {
@@ -334,7 +342,7 @@ export interface DiscrepancyResult {
 /**
  * Submits the move-out photos for real AI discrepancy detection using Claude.
  */
-export async function submitMoveOutReport(moveInPhotos: any, moveOutPhotos: any): Promise<DiscrepancyResult[]> {
+export async function submitMoveOutReport(moveInPhotos: any, moveOutPhotos: any, aiMode?: 'claude' | 'ollama'): Promise<DiscrepancyResult[]> {
   console.log('AI Request: POST /api/ai/generate (Claude multimodal analysis)');
   
   const results: DiscrepancyResult[] = [];
@@ -365,7 +373,8 @@ The notes field must contain one concise sentence.
             prompt,
             images: [dataUrlToAiImage(inPhotoFull), dataUrlToAiImage(outPhotoFull)],
             maxTokens: 800,
-            temperature: 0.1
+            temperature: 0.1,
+            aiMode
           });
           console.log(`AI Output for ${roomId}/${stepId}:`, comparison);
 
@@ -389,4 +398,35 @@ The notes field must contain one concise sentence.
   }
 
   return results;
+}
+
+export async function uploadImage(imageDataUrl: string): Promise<string> {
+  const response = await fetch('/api/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: imageDataUrl })
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || '사진 업로드에 실패했습니다.');
+  }
+
+  const data = await response.json();
+  if (data && data.ok && data.url) {
+    return data.url;
+  }
+  throw new Error('올바르지 않은 업로드 응답입니다.');
+}
+
+export async function resetServerAssets(): Promise<void> {
+  const response = await fetch('/api/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || '서버 에셋 초기화에 실패했습니다.');
+  }
 }

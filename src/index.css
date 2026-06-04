@@ -1163,3 +1163,396 @@ button:disabled { opacity: 0.36; cursor: not-allowed; }
   min-width: 60px;
 }
 .nav-item.active { color: var(--blue); }
+
+/* ─── ALBUM VIEW ─── */
+.album-view {
+  background: var(--bg);
+  min-height: 100svh;
+  padding-bottom: 5rem;
+}
+
+.album-room-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.album-room-card {
+  background: white;
+  border-radius: var(--radius);
+  border: 1.5px solid var(--border);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.2s;
+}
+
+.album-room-card:hover {
+  box-shadow: var(--shadow);
+}
+
+.album-room-header {
+  width: 100%;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: white;
+  border: none;
+  cursor: pointer;
+  border-bottom: 1.5px solid var(--border);
+}
+
+.album-room-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.album-room-info h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.room-emoji {
+  font-size: 1.4rem;
+}
+
+.album-room-content {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.album-step-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  border-bottom: 1px dashed var(--border);
+  padding-bottom: 1.5rem;
+}
+
+.album-step-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.album-step-label {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--text-sub);
+}
+
+.album-photo-compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.album-photo-box {
+  position: relative;
+  aspect-ratio: 4/3;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1.5px solid var(--border);
+  background: #f8fafc;
+}
+
+.album-photo-badge {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.35rem;
+  font-size: 0.65rem;
+  font-weight: 800;
+  color: white;
+  z-index: 10;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.album-photo-badge.in {
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+}
+
+.album-photo-badge.out {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+}
+
+.album-compare-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.album-compare-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: var(--text-dim);
+  border: 1.5px dashed var(--border);
+  box-sizing: border-box;
+}
+
+.album-compare-placeholder span {
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.album-discrepancy-card {
+  margin-top: 0.5rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid;
+}
+
+.album-discrepancy-card.none {
+  background: rgba(34,198,142,0.06);
+  border-color: rgba(34,198,142,0.18);
+  color: #047857;
+}
+
+.album-discrepancy-card.low {
+  background: rgba(245,158,11,0.06);
+  border-color: rgba(245,158,11,0.18);
+  color: #b45309;
+}
+
+.album-discrepancy-card.high {
+  background: rgba(244,63,94,0.06);
+  border-color: rgba(244,63,94,0.18);
+  color: #e11d48;
+}
+
+.discrepancy-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 800;
+  font-size: 0.8rem;
+  margin-bottom: 0.25rem;
+}
+
+.discrepancy-card-header svg {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.discrepancy-notes {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-sub);
+}
+
+.empty-album {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 4rem 2rem;
+  text-align: center;
+  background: white;
+  border-radius: var(--radius);
+  border: 1.5px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-dim);
+}
+
+.empty-album p {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+/* ─── AI MODE SELECTOR ─── */
+.ai-mode-selector-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin: 0.85rem auto 0;
+  padding: 0.35rem 0.5rem;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  width: fit-content;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.ai-mode-label {
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.7);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding-left: 0.4rem;
+}
+
+.ai-mode-toggle-group {
+  display: flex;
+  background: rgba(0, 0, 0, 0.16);
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.ai-mode-btn {
+  padding: 0.28rem 0.85rem;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ai-mode-btn.active {
+  background: white;
+  color: #1e293b;
+  font-weight: 800;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.ai-mode-btn:hover:not(.active) {
+  color: rgba(255, 255, 255, 0.95);
+}
+
+/* ─── SETTINGS MODAL / BOTTOM SHEET ─── */
+.settings-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(6px);
+  z-index: 1000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: modal-fade-in 0.25s ease-out;
+}
+
+.settings-modal-content {
+  width: 100%;
+  max-width: 480px;
+  background: white;
+  border-top-left-radius: 1.5rem;
+  border-top-right-radius: 1.5rem;
+  padding: 1.5rem 1.5rem 2.5rem;
+  box-shadow: 0 -8px 32px rgba(15, 23, 42, 0.12);
+  transform: translateY(0);
+  animation: sheet-slide-up 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  box-sizing: border-box;
+}
+
+.settings-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  border-bottom: 1.5px solid var(--border);
+  padding-bottom: 0.75rem;
+}
+
+.settings-modal-header h3 {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.settings-close-btn {
+  background: var(--bg);
+  border: 1.5px solid var(--border);
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all 0.15s;
+}
+
+.settings-close-btn:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.settings-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.settings-action-btn {
+  width: 100%;
+  text-align: left;
+  padding: 1.2rem;
+  border-radius: var(--radius);
+  border: 1.5px solid var(--border);
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.settings-action-btn:hover {
+  border-color: var(--blue);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+
+.settings-action-btn h4 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.settings-action-btn p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.settings-action-btn.danger {
+  border-color: rgba(244, 63, 94, 0.18);
+  background: rgba(255, 241, 242, 0.4);
+}
+
+.settings-action-btn.danger:hover {
+  border-color: var(--rose);
+  background: rgba(255, 241, 242, 0.8);
+}
+
+.settings-action-btn.danger h4 {
+  color: var(--rose);
+}
+
+@keyframes modal-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes sheet-slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}

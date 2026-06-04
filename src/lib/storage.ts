@@ -63,6 +63,7 @@ export type PersistentData = {
   capturePlans?: Partial<Record<InspectionPhase, Record<string, CapturePlan>>>;
   captureReviews?: Partial<Record<InspectionPhase, Record<string, Record<string, CaptureReview | CaptureReview[]>>>>;
   blockchainProof?: BlockchainProof;
+  aiMode?: 'claude' | 'ollama';
 };
 
 const INITIAL_DATA: PersistentData = {
@@ -70,7 +71,8 @@ const INITIAL_DATA: PersistentData = {
     'move-in': {},
     'move-out': {}
   },
-  currentPhase: 'move-in'
+  currentPhase: 'move-in',
+  aiMode: 'claude'
 };
 
 /**

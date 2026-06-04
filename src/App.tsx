@@ -3,11 +3,12 @@ import { Camera, FileText, Settings, ArrowLeft, CheckCircle2, ChevronRight, Imag
 import walkthroughData from './walkthrough.json';
 import { loadAppData, saveAppData, clearAppData, type CapturePlan, type CaptureReview, type GuidedCaptureStep, type PersistentData, type InspectionPhase } from './lib/storage';
 import { anchorInspectionEvidence, verifyInspectionEvidence, type VerificationResult } from './lib/blockchain';
-import { generateCapturePlanFromOverview, reviewGuidedCapture, submitMoveOutReport, analyzeImage, type DiscrepancyResult, type AnalysisData } from './lib/api';
+import { generateCapturePlanFromOverview, reviewGuidedCapture, submitMoveOutReport, analyzeImage, uploadImage, resetServerAssets, type DiscrepancyResult, type AnalysisData } from './lib/api';
 import ImageUpload from './components/ImageUpload';
 import AnalysisResult from './components/AnalysisResult';
+import AlbumView from './components/AlbumView';
 
-type AppState = 'setup' | 'hub' | 'wizard' | 'report' | 'processing' | 'analyze';
+type AppState = 'setup' | 'hub' | 'wizard' | 'report' | 'processing' | 'analyze' | 'album';
 
 type Room = { id: string; name: string; steps: GuidedCaptureStep[] };
 type CaptureQuality = { status: 'checking' | 'good' | 'warn'; message: string };
@@ -173,6 +174,7 @@ function analyzeCaptureFrame(video: HTMLVideoElement, canvas: HTMLCanvasElement)
 export default function App() {
   const [view, setView] = useState<AppState>('hub');
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [data, setData] = useState<PersistentData>({ photos: { 'move-in': {}, 'move-out': {} }, currentPhase: 'move-in' });
   const [isLoading, setIsLoading] = useState(true);
@@ -375,69 +377,92 @@ export default function App() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const newPhoto = canvas.toDataURL('image/jpeg', 0.8);
+    const newPhotoBase64 = canvas.toDataURL('image/jpeg', 0.8);
     const nextPhotoIndex = currentStepPhotos.length;
     setCaptureFlash(true);
     window.setTimeout(() => setCaptureFlash(false), 180);
-    setData(prev => {
-      const phase = prev.currentPhase;
-      const phasePhotos = prev.photos[phase] || {};
-      const roomPhotos = phasePhotos[selectedRoomId] || {};
-      const stepPhotos = roomPhotos[currentStep.id] || [];
-      return {
-        ...prev,
-        photos: {
-          ...prev.photos,
-          [phase]: { ...phasePhotos, [selectedRoomId]: { ...roomPhotos, [currentStep.id]: [...stepPhotos, newPhoto] } }
-        }
-      };
-    });
 
-    if (currentStep.id === 'overview' && currentRoom && !hasAiCapturePlan(currentPlan)) {
-      const startedAt = performance.now();
+    if (currentStep.id === 'overview') {
       setIsGeneratingGuide(true);
       setGuideGenerationError(null);
-      try {
-        const plan = await generateCapturePlanFromOverview({
-          roomName: currentRoom.name,
-          roomTypeId: selectedRoomId,
-          imageDataUrl: newPhoto
-        });
-        saveCapturePlan(data.currentPhase, selectedRoomId, plan);
-        setCurrentStepIndex(1);
-      } catch (error) {
-        setGuideGenerationError({
-          message: getDisplayErrorMessage(error, 'AI 촬영 목록 생성에 실패했습니다.'),
-          elapsedMs: Math.round(performance.now() - startedAt)
-        });
-      } finally {
-        setIsGeneratingGuide(false);
-      }
-      return;
-    }
-
-    if (currentStep.id === 'overview') return;
-
-    if (currentRoom) {
-      const startedAt = performance.now();
+    } else {
       setIsReviewingCapture(true);
       setCaptureReviewError(null);
-      try {
-        const review = await reviewGuidedCapture({
-          roomName: currentRoom.name,
-          step: currentStep,
-          imageDataUrl: newPhoto
-        });
-        saveCaptureReview(data.currentPhase, selectedRoomId, currentStep.id, {
-          ...review,
-          photoIndex: nextPhotoIndex
-        });
-      } catch (error) {
-        setCaptureReviewError({
-          message: getDisplayErrorMessage(error, 'AI 사진 검수에 실패했습니다.'),
-          elapsedMs: Math.round(performance.now() - startedAt)
-        });
-      } finally {
+    }
+
+    try {
+      const savedUrl = await uploadImage(newPhotoBase64);
+
+      setData(prev => {
+        const phase = prev.currentPhase;
+        const phasePhotos = prev.photos[phase] || {};
+        const roomPhotos = phasePhotos[selectedRoomId] || {};
+        const stepPhotos = roomPhotos[currentStep.id] || [];
+        return {
+          ...prev,
+          photos: {
+            ...prev.photos,
+            [phase]: { ...phasePhotos, [selectedRoomId]: { ...roomPhotos, [currentStep.id]: [...stepPhotos, savedUrl] } }
+          }
+        };
+      });
+
+      if (currentStep.id === 'overview' && currentRoom && !hasAiCapturePlan(currentPlan)) {
+        const startedAt = performance.now();
+        try {
+          const plan = await generateCapturePlanFromOverview({
+            roomName: currentRoom.name,
+            roomTypeId: selectedRoomId,
+            imageDataUrl: newPhotoBase64,
+            aiMode: data.aiMode
+          });
+          saveCapturePlan(data.currentPhase, selectedRoomId, plan);
+          setCurrentStepIndex(1);
+        } catch (error) {
+          setGuideGenerationError({
+            message: getDisplayErrorMessage(error, 'AI 촬영 목록 생성에 실패했습니다.'),
+            elapsedMs: Math.round(performance.now() - startedAt)
+          });
+        } finally {
+          setIsGeneratingGuide(false);
+        }
+        return;
+      }
+
+      if (currentStep.id === 'overview') {
+        setIsGeneratingGuide(false);
+        return;
+      }
+
+      if (currentRoom) {
+        const startedAt = performance.now();
+        try {
+          const review = await reviewGuidedCapture({
+            roomName: currentRoom.name,
+            step: currentStep,
+            imageDataUrl: newPhotoBase64,
+            aiMode: data.aiMode
+          });
+          saveCaptureReview(data.currentPhase, selectedRoomId, currentStep.id, {
+            ...review,
+            photoIndex: nextPhotoIndex
+          });
+        } catch (error) {
+          setCaptureReviewError({
+            message: getDisplayErrorMessage(error, 'AI 사진 검수에 실패했습니다.'),
+            elapsedMs: Math.round(performance.now() - startedAt)
+          });
+        } finally {
+          setIsReviewingCapture(false);
+        }
+      }
+    } catch (uploadErr) {
+      const errMsg = getDisplayErrorMessage(uploadErr, '사진 서버 업로드에 실패했습니다.');
+      if (currentStep.id === 'overview') {
+        setGuideGenerationError({ message: errMsg });
+        setIsGeneratingGuide(false);
+      } else {
+        setCaptureReviewError({ message: errMsg });
         setIsReviewingCapture(false);
       }
     }
@@ -522,7 +547,7 @@ export default function App() {
         });
         setData(prev => ({ ...prev, blockchainProof: response, currentPhase: 'move-out' }));
       } else {
-        const results = await submitMoveOutReport(data.photos['move-in'], data.photos['move-out']);
+        const results = await submitMoveOutReport(data.photos['move-in'], data.photos['move-out'], data.aiMode);
         setDiscrepancies(results);
       }
       setView('report');
@@ -630,6 +655,23 @@ export default function App() {
               {data.currentPhase === 'move-in' ? '입주 전 점검' : '퇴실 점검'}
             </h1>
             <p className="hero-subtitle">각 공간의 상태를 촬영하세요.</p>
+            <div className="ai-mode-selector-wrap">
+              <span className="ai-mode-label">AI Engine</span>
+              <div className="ai-mode-toggle-group">
+                <button
+                  className={`ai-mode-btn ${(!data.aiMode || data.aiMode === 'claude') ? 'active' : ''}`}
+                  onClick={() => setData(prev => ({ ...prev, aiMode: 'claude' }))}
+                >
+                  Claude
+                </button>
+                <button
+                  className={`ai-mode-btn ${(data.aiMode === 'ollama') ? 'active' : ''}`}
+                  onClick={() => setData(prev => ({ ...prev, aiMode: 'ollama' }))}
+                >
+                  Gemma4
+                </button>
+              </div>
+            </div>
             <p className="hero-stat">{totalCompleted}/{rooms.length} 공간 촬영 완료</p>
             <div className="hero-progress-bar">
               <div
@@ -697,7 +739,7 @@ export default function App() {
                 onClick={handleFinalizeReport}
                 disabled={Object.keys(currentPhasePhotos).length === 0 || !allRoomsComplete}
               >
-                {data.currentPhase === 'move-in' ? '증거 root 로컬 체인에 고정하기' : '퇴실 비교 분석하기'}
+                {data.currentPhase === 'move-in' ? '블록체인 위변조 방지 등록하기' : '퇴실 비교 분석하기'}
               </button>
             </div>
           </div>
@@ -928,7 +970,7 @@ export default function App() {
                   setAnalyzeError(null);
                   setIsAnalyzing(true);
                   try {
-                    const result = await analyzeImage(file);
+                    const result = await analyzeImage(file, data.aiMode);
                     setAnalyzeResult(result);
                   } catch (err) {
                     setAnalyzeError(err instanceof Error ? err.message : '분석에 실패했습니다.');
@@ -950,13 +992,17 @@ export default function App() {
         </div>
       )}
 
+      {view === 'album' && (
+        <AlbumView rooms={rooms} data={data} discrepancies={discrepancies} />
+      )}
+
       {/* ── PROCESSING ── */}
       {view === 'processing' && (
         <div className="processing-view">
           <div className="processing-orb">
             <div className="spinner" />
           </div>
-          <h2>{data.currentPhase === 'move-in' ? '로컬 체인에 증거 고정 중...' : 'AI 비교 분석 중...'}</h2>
+          <h2>{data.currentPhase === 'move-in' ? '블록체인 위변조 방지 등록 중...' : 'AI 비교 분석 중...'}</h2>
           <p>데이터를 안전하게 처리하고 있습니다.</p>
         </div>
       )}
@@ -969,7 +1015,7 @@ export default function App() {
               <div className="report-success-icon">
                 <CheckCircle2 size={36} color="white" />
               </div>
-              <h1>{discrepancies.length > 0 ? '분석 완료' : '보고서 저장 완료'}</h1>
+              <h1>{discrepancies.length > 0 ? '비교 분석 완료' : '증명서 저장 완료'}</h1>
               <p>점검 데이터가 처리되었습니다.</p>
             </div>
           </div>
@@ -1038,9 +1084,19 @@ export default function App() {
                 <button
                   className="danger-btn"
                   onClick={async () => {
-                    if (confirm('모든 데이터를 초기화하시겠습니까?')) {
-                      await clearAppData();
-                      window.location.reload();
+                    if (confirm('모든 데이터를 초기화하시겠습니까? 서버에 저장된 사진 데이터도 함께 삭제됩니다.')) {
+                      try {
+                        setIsSubmitting(true);
+                        setView('processing');
+                        await resetServerAssets();
+                        await clearAppData();
+                        window.location.reload();
+                      } catch (err) {
+                        alert(err instanceof Error ? err.message : '초기화에 실패했습니다.');
+                        setView('report');
+                      } finally {
+                        setIsSubmitting(false);
+                      }
                     }
                   }}
                 >
@@ -1059,28 +1115,76 @@ export default function App() {
             <Home size={22} />
             <span>홈</span>
           </button>
-          <button className={`nav-item ${view === 'analyze' ? 'active' : ''}`} onClick={() => setView('analyze')}>
-            <ScanLine size={22} />
-            <span>분석</span>
-          </button>
           <button className={`nav-item ${view === 'report' ? 'active' : ''}`} onClick={() => setView('report')}>
             <FileText size={22} />
-            <span>보고서</span>
+            <span>증명서</span>
+          </button>
+          <button className={`nav-item ${view === 'album' ? 'active' : ''}`} onClick={() => setView('album')}>
+            <ImageIcon size={22} />
+            <span>앨범</span>
           </button>
           <button
             className="nav-item"
-            onClick={() => {
-              if (confirm('방 구성을 다시 설정하시겠습니까?')) {
-                setSetupCounts(Object.fromEntries(ROOM_TYPES.map(t => [t.id, 0])));
-                setData(prev => { const next = { ...prev }; delete next.roomConfig; return next; });
-                setView('setup');
-              }
-            }}
+            onClick={() => setIsSettingsOpen(true)}
           >
             <Settings size={22} />
             <span>설정</span>
           </button>
         </nav>
+      )}
+
+      {/* ── SETTINGS MODAL / BOTTOM SHEET ── */}
+      {isSettingsOpen && (
+        <div className="settings-modal-overlay" onClick={() => setIsSettingsOpen(false)}>
+          <div className="settings-modal-content" onClick={e => e.stopPropagation()}>
+            <div className="settings-modal-header">
+              <h3>설정</h3>
+              <button className="settings-close-btn" onClick={() => setIsSettingsOpen(false)}>✕</button>
+            </div>
+            <div className="settings-modal-body">
+              <button
+                className="settings-action-btn"
+                onClick={() => {
+                  if (confirm('방 구성을 다시 설정하시겠습니까? 기존 데이터가 일부 보존되지만 공간 개수가 다시 조율됩니다.')) {
+                    setIsSettingsOpen(false);
+                    setSetupCounts(Object.fromEntries(ROOM_TYPES.map(t => [t.id, 0])));
+                    setData(prev => { const next = { ...prev }; delete next.roomConfig; return next; });
+                    setView('setup');
+                  }
+                }}
+              >
+                <h4>방 구성 재설정</h4>
+                <p>점검할 방 종류와 개수를 변경합니다.</p>
+              </button>
+
+              <button
+                className="settings-action-btn danger"
+                onClick={async () => {
+                  if (confirm('전체 점검 데이터를 초기화하시겠습니까?')) {
+                    if (confirm('정말로 초기화하시겠습니까? 서버에 저장된 업로드 사진과 로컬 데이터가 모두 영구 삭제됩니다.')) {
+                      setIsSettingsOpen(false);
+                      setIsSubmitting(true);
+                      setView('processing');
+                      try {
+                        await resetServerAssets();
+                        await clearAppData();
+                        window.location.reload();
+                      } catch (err) {
+                        alert(err instanceof Error ? err.message : '초기화에 실패했습니다.');
+                        setView('hub');
+                      } finally {
+                        setIsSubmitting(false);
+                      }
+                    }
+                  }
+                }}
+              >
+                <h4>전체 점검 초기화</h4>
+                <p>서버 사진 파일 및 로컬 DB를 비우고 최초 상태로 재시작합니다.</p>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
